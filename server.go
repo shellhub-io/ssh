@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -38,6 +37,9 @@ var DefaultChannelHandlers = map[string]ChannelHandler{
 }
 
 var permissionsPublicKeyExt = "gliderlabs/ssh.PublicKey"
+
+// ErrPermissionDenied is returned when authentication fails.
+var ErrPermissionDenied = errors.New("permission denied")
 
 func ensureNoPKInPermissions(ctx Context) error {
 	if _, ok := ctx.Permissions().Extensions[permissionsPublicKeyExt]; ok {
@@ -180,7 +182,7 @@ func (srv *Server) config(ctx Context) *gossh.ServerConfig {
 			}
 			ok := srv.PasswordHandler(ctx, string(password))
 			if !ok {
-				return ctx.Permissions().Permissions, fmt.Errorf("permission denied")
+				return ctx.Permissions().Permissions, ErrPermissionDenied
 			}
 			return ctx.Permissions().Permissions, nil
 		}
@@ -195,7 +197,7 @@ func (srv *Server) config(ctx Context) *gossh.ServerConfig {
 			}
 			ok := srv.PublicKeyHandler(ctx, key)
 			if !ok {
-				return ctx.Permissions().Permissions, fmt.Errorf("permission denied")
+				return ctx.Permissions().Permissions, ErrPermissionDenied
 			}
 
 			pkStr := base64.StdEncoding.EncodeToString(key.Marshal())
@@ -217,7 +219,7 @@ func (srv *Server) config(ctx Context) *gossh.ServerConfig {
 				return ctx.Permissions().Permissions, err
 			}
 			if !ok {
-				return ctx.Permissions().Permissions, fmt.Errorf("permission denied")
+				return ctx.Permissions().Permissions, ErrPermissionDenied
 			}
 			return ctx.Permissions().Permissions, nil
 		}
