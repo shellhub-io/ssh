@@ -208,6 +208,8 @@ func (sess *session) Subsystem() string {
 }
 
 func (sess *session) Pty() (Pty, <-chan Window, bool) {
+	sess.Lock()
+	defer sess.Unlock()
 	if sess.pty != nil {
 		return *sess.pty, sess.winch, true
 	}
@@ -333,8 +335,10 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 					continue
 				}
 			}
+			sess.Lock()
 			sess.pty = &ptyReq
 			sess.winch = make(chan Window, 1)
+			sess.Unlock()
 			sess.winch <- ptyReq.Window
 			defer func() {
 				// when reqs is closed
@@ -348,7 +352,9 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 			}
 			win, ok := parseWinchRequest(req.Payload)
 			if ok {
+				sess.Lock()
 				sess.pty.Window = win
+				sess.Unlock()
 				sess.winch <- win
 			}
 			req.Reply(ok, nil)
