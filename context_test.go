@@ -85,7 +85,7 @@ func TestSetValueConcurrency(t *testing.T) {
 			_ = ctx.Value("foo")
 			select {
 			case <-ctx.Done():
-				break
+				return
 			default:
 			}
 		}
