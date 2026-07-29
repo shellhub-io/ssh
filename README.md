@@ -3,7 +3,7 @@
 <p>
     <a href="https://github.com/charmbracelet/ssh/releases"><img src="https://img.shields.io/github/release/charmbracelet/ssh.svg" alt="Latest Release"></a>
     <a href="https://pkg.go.dev/charm.land/ssh?tab=doc"><img src="https://godoc.org/github.com/golang/gddo?status.svg" alt="GoDoc"></a>
-    <a href="https://github.com/charmbracelet/ssh/actions"><img src="https://github.com/charmbracelet/ssh/workflows/build/badge.svg" alt="Build Status"></a>
+    <a href="https://github.com/charmbracelet/ssh/actions"><img src="https://github.com/charmbracelet/ssh/actions/workflows/build.yml/badge.svg" alt="Build Status"></a>
     <a href="https://codecov.io/gh/charmbracelet/ssh"><img alt="Codecov branch" src="https://img.shields.io/codecov/c/github/charmbracelet/ssh/master.svg"></a>
 </p>
 
@@ -54,6 +54,10 @@ We’d love to hear your thoughts on this project. Feel free to drop us a note!
 * [Twitter](https://twitter.com/charmcli)
 * [The Fediverse](https://mastodon.social/@charmcli)
 * [Discord](https://charm.sh/chat)
+
+## Acknowledgements
+
+This package was originally forked from [gliderlabs/ssh](https://github.com/gliderlabs/ssh)
 
 ## License
 
