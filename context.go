@@ -125,7 +125,7 @@ func resetPermissions(ctx Context) {
 }
 
 // this is separate from newContext because we will get ConnMetadata
-// at different points so it needs to be applied separately
+// at different points so it needs to be applied separately.
 func applyConnMetadata(ctx Context, conn gossh.ConnMetadata) {
 	// The username is per-authentication-attempt and can change between
 	// attempts on the same connection, so it must be refreshed every time.

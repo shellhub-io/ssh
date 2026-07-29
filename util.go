@@ -35,22 +35,22 @@ func parsePtyRequest(payload []byte) (pty Pty, ok bool) {
 	// The payload starts from the TERM variable.
 	term, rem, ok := parseString(payload)
 	if !ok {
-		return
+		return pty, ok
 	}
 	win, rem, ok := parseWindow(rem)
 	if !ok {
-		return
+		return pty, ok
 	}
 	modes, ok := parseTerminalModes(rem)
 	if !ok {
-		return
+		return pty, ok
 	}
 	pty = Pty{
 		Term:   term,
 		Window: win,
 		Modes:  modes,
 	}
-	return
+	return pty, ok
 }
 
 func parseTerminalModes(in []byte) (modes ssh.TerminalModes, ok bool) {
@@ -76,14 +76,14 @@ func parseTerminalModes(in []byte) (modes ssh.TerminalModes, ok bool) {
 	//  only some combinations make sense).
 	_, rem, ok := parseUint32(in)
 	if !ok {
-		return
+		return modes, ok
 	}
 	const ttyOpEnd = 0
 	for len(rem) > 0 {
 		if modes == nil {
 			modes = make(ssh.TerminalModes)
 		}
-		code := uint8(rem[0])
+		code := rem[0]
 		rem = rem[1:]
 		if code == ttyOpEnd || code > 160 {
 			break
@@ -91,12 +91,12 @@ func parseTerminalModes(in []byte) (modes ssh.TerminalModes, ok bool) {
 		var val uint32
 		val, rem, ok = parseUint32(rem)
 		if !ok {
-			return
+			return modes, ok
 		}
 		modes[code] = val
 	}
 	ok = true
-	return
+	return modes, ok
 }
 
 func parseWindow(s []byte) (win Window, rem []byte, ok bool) {
@@ -114,19 +114,19 @@ func parseWindow(s []byte) (win Window, rem []byte, ok bool) {
 	//   uint32    terminal height, pixels
 	wCols, rem, ok := parseUint32(s)
 	if !ok {
-		return
+		return win, rem, ok
 	}
 	hRows, rem, ok := parseUint32(rem)
 	if !ok {
-		return
+		return win, rem, ok
 	}
 	wPixels, rem, ok := parseUint32(rem)
 	if !ok {
-		return
+		return win, rem, ok
 	}
 	hPixels, rem, ok := parseUint32(rem)
 	if !ok {
-		return
+		return win, rem, ok
 	}
 	win = Window{
 		Width:        int(wCols),
@@ -134,7 +134,7 @@ func parseWindow(s []byte) (win Window, rem []byte, ok bool) {
 		WidthPixels:  int(wPixels),
 		HeightPixels: int(hPixels),
 	}
-	return
+	return win, rem, ok
 }
 
 func parseString(in []byte) (out string, rem []byte, ok bool) {

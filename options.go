@@ -42,6 +42,8 @@ func HostKeyFile(filepath string) Option {
 	}
 }
 
+// KeyboardInteractiveAuth returns a functional option that sets the
+// keyboard-interactive authentication handler.
 func KeyboardInteractiveAuth(fn KeyboardInteractiveHandler) Option {
 	return func(srv *Server) error {
 		srv.KeyboardInteractiveHandler = fn

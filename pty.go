@@ -28,8 +28,8 @@ func (w ptyWriter) Write(p []byte) (int, error) {
 	m := len(p)
 	// normalize \n to \r\n when pty is accepted.
 	// this is a hardcoded shortcut since we don't support terminal modes.
-	p = bytes.Replace(p, []byte{'\n'}, []byte{'\r', '\n'}, -1)
-	p = bytes.Replace(p, []byte{'\r', '\r', '\n'}, []byte{'\r', '\n'}, -1)
+	p = bytes.ReplaceAll(p, []byte{'\n'}, []byte{'\r', '\n'})
+	p = bytes.ReplaceAll(p, []byte{'\r', '\r', '\n'}, []byte{'\r', '\n'})
 	n, err := w.w.Write(p)
 	if n > m {
 		n = m

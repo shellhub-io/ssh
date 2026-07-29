@@ -75,7 +75,7 @@ func (i *impl) start(c *exec.Cmd) error {
 	}()
 	go func() {
 		select {
-		case <-i.Context.Done():
+		case <-i.Done():
 			c.Err = windows.TerminateProcess(windows.Handle(process), 1)
 		case r := <-donec:
 			c.ProcessState = r.ProcessState

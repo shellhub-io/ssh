@@ -18,7 +18,7 @@ import (
 // When Command() returns an empty slice, the user requested a shell. Otherwise
 // the user is performing an exec with those command arguments.
 //
-// TODO: Signals
+// TODO: Signals.
 type Session interface {
 	gossh.Channel
 
@@ -88,9 +88,10 @@ type Session interface {
 }
 
 // maxSigBufSize is how many signals will be buffered
-// when there is no signal channel specified
+// when there is no signal channel specified.
 const maxSigBufSize = 128
 
+// DefaultSessionHandler is the default handler for the "session" channel type.
 func DefaultSessionHandler(srv *Server, conn *gossh.ServerConn, newChan gossh.NewChannel, ctx Context) {
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
@@ -246,52 +247,52 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 		switch req.Type {
 		case "shell", "exec":
 			if sess.handled {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 
 			payload := struct{ Value string }{}
-			gossh.Unmarshal(req.Payload, &payload)
+			_ = gossh.Unmarshal(req.Payload, &payload)
 			sess.rawCmd = payload.Value
 
 			// If there's a session policy callback, we need to confirm before
 			// accepting the session.
 			if sess.sessReqCb != nil && !sess.sessReqCb(sess, req.Type) {
 				sess.rawCmd = ""
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 
 			sess.handled = true
-			req.Reply(true, nil)
+			_ = req.Reply(true, nil)
 
 			go func() {
 				if sess.pty != nil && !sess.pty.IsZero() {
 					// TODO: log error to server
-					go io.Copy(sess.pty, sess) // nolint: errcheck
-					go io.Copy(sess, sess.pty) // nolint: errcheck
+					go io.Copy(sess.pty, sess) //nolint: errcheck
+					go io.Copy(sess, sess.pty) //nolint: errcheck
 				}
 				sess.handler(sess)
-				sess.Exit(0)
+				_ = sess.Exit(0)
 				if sess.pty != nil && !sess.pty.IsZero() {
-					sess.pty.Close() // nolint: errcheck
+					_ = sess.pty.Close()
 				}
 			}()
 		case "subsystem":
 			if sess.handled {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 
 			payload := struct{ Value string }{}
-			gossh.Unmarshal(req.Payload, &payload)
+			_ = gossh.Unmarshal(req.Payload, &payload)
 			sess.subsystem = payload.Value
 
 			// If there's a session policy callback, we need to confirm before
 			// accepting the session.
 			if sess.sessReqCb != nil && !sess.sessReqCb(sess, req.Type) {
 				sess.rawCmd = ""
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 
@@ -300,29 +301,29 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 				handler = sess.subsystemHandlers["default"]
 			}
 			if handler == nil {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 
 			sess.handled = true
-			req.Reply(true, nil)
+			_ = req.Reply(true, nil)
 
 			go func() {
 				handler(sess)
-				sess.Exit(0)
+				_ = sess.Exit(0)
 			}()
 		case "env":
 			if sess.handled {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 			var kv struct{ Key, Value string }
-			gossh.Unmarshal(req.Payload, &kv)
+			_ = gossh.Unmarshal(req.Payload, &kv)
 			sess.env = append(sess.env, fmt.Sprintf("%s=%s", kv.Key, kv.Value))
-			req.Reply(true, nil)
+			_ = req.Reply(true, nil)
 		case "signal":
 			var payload struct{ Signal string }
-			gossh.Unmarshal(req.Payload, &payload)
+			_ = gossh.Unmarshal(req.Payload, &payload)
 			sess.Lock()
 			if sess.sigCh != nil {
 				sess.sigCh <- Signal(payload.Signal)
@@ -334,18 +335,18 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 			sess.Unlock()
 		case "pty-req":
 			if sess.handled || sess.pty != nil {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 			ptyReq, ok := parsePtyRequest(req.Payload)
 			if !ok {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 			if sess.ptyCb != nil {
 				ok := sess.ptyCb(sess.ctx, ptyReq)
 				if !ok {
-					req.Reply(false, nil)
+					_ = req.Reply(false, nil)
 					continue
 				}
 			}
@@ -358,11 +359,11 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 				closer, err := sess.ptyHandler(sess.ctx, sess, ptyReq)
 				if err != nil {
 					// TODO: handle error
-					req.Reply(false, nil)
+					_ = req.Reply(false, nil)
 					continue
 				}
 
-				defer closer() // nolint: errcheck
+				defer func() { _ = closer() }() //nolint:staticcheck // intentional: runs when req channel closes
 
 				if !sess.EmulatedPty() && !sess.pty.IsZero() {
 					go func() {
@@ -376,14 +377,14 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 				}
 			}
 
-			defer func() {
+			defer func() { //nolint:staticcheck // intentional: runs when req channel closes
 				// when reqs is closed
 				close(sess.winch)
 			}()
-			req.Reply(ok, nil)
+			_ = req.Reply(ok, nil)
 		case "window-change":
 			if sess.pty == nil {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 			win, _, ok := parseWindow(req.Payload)
@@ -391,11 +392,11 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 				sess.pty.Window = win
 				sess.winch <- win
 			}
-			req.Reply(ok, nil)
+			_ = req.Reply(ok, nil)
 		case agentRequestType:
 			// TODO: option/callback to allow agent forwarding
 			SetAgentRequested(sess.ctx)
-			req.Reply(true, nil)
+			_ = req.Reply(true, nil)
 		case "break":
 			ok := false
 			sess.Lock()
@@ -403,22 +404,22 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 				sess.breakCh <- true
 				ok = true
 			}
-			req.Reply(ok, nil)
+			_ = req.Reply(ok, nil)
 			sess.Unlock()
 		default:
 			// TODO: debug log
-			req.Reply(false, nil)
+			_ = req.Reply(false, nil)
 		}
 	}
 }
 
-func (s *session) ptyAllocate(term string, win Window, modes gossh.TerminalModes) (func() error, error) {
-	p, err := newPty(s.ctx, term, win, modes)
+func (sess *session) ptyAllocate(term string, win Window, modes gossh.TerminalModes) (func() error, error) {
+	p, err := newPty(sess.ctx, term, win, modes)
 	if err != nil {
 		return nil, err
 	}
 
-	s.pty = &Pty{
+	sess.pty = &Pty{
 		Term:   term,
 		Window: win,
 		Modes:  modes,

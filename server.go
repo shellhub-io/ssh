@@ -16,16 +16,22 @@ import (
 // and ListenAndServeTLS methods after a call to Shutdown or Close.
 var ErrServerClosed = errors.New("ssh: Server closed")
 
+// SubsystemHandler is a handler for a given SSH subsystem.
 type SubsystemHandler func(s Session)
 
+// DefaultSubsystemHandlers is the default set of subsystem handlers.
 var DefaultSubsystemHandlers = map[string]SubsystemHandler{}
 
+// RequestHandler is a callback for custom global SSH requests.
 type RequestHandler func(ctx Context, srv *Server, req *gossh.Request) (ok bool, payload []byte)
 
+// DefaultRequestHandlers is the default set of request handlers.
 var DefaultRequestHandlers = map[string]RequestHandler{}
 
+// ChannelHandler is a callback for custom channel types.
 type ChannelHandler func(srv *Server, conn *gossh.ServerConn, newChan gossh.NewChannel, ctx Context)
 
+// DefaultChannelHandlers is the default set of channel handlers.
 var DefaultChannelHandlers = map[string]ChannelHandler{
 	"session": DefaultSessionHandler,
 }
@@ -33,7 +39,7 @@ var DefaultChannelHandlers = map[string]ChannelHandler{
 var permissionsPublicKeyExt = "gliderlabs/ssh.PublicKey"
 
 func ensureNoPKInPermissions(ctx Context) error {
-	if _, ok := ctx.Permissions().Permissions.Extensions[permissionsPublicKeyExt]; ok {
+	if _, ok := ctx.Permissions().Extensions[permissionsPublicKeyExt]; ok {
 		return errors.New("misconfigured server: public key incorrectly set")
 	}
 
@@ -190,10 +196,10 @@ func (srv *Server) config(ctx Context) *gossh.ServerConfig {
 			}
 
 			pkStr := base64.StdEncoding.EncodeToString(key.Marshal())
-			if ctx.Permissions().Permissions.Extensions == nil {
-				ctx.Permissions().Permissions.Extensions = map[string]string{}
+			if ctx.Permissions().Extensions == nil {
+				ctx.Permissions().Extensions = map[string]string{}
 			}
-			ctx.Permissions().Permissions.Extensions[permissionsPublicKeyExt] = pkStr
+			ctx.Permissions().Extensions[permissionsPublicKeyExt] = pkStr
 
 			return ctx.Permissions().Permissions, nil
 		}
@@ -236,7 +242,7 @@ func (srv *Server) Close() error {
 	srv.closeDoneChanLocked()
 	err := srv.closeListenersLocked()
 	for c := range srv.conns {
-		c.Close()
+		_ = c.Close()
 		delete(srv.conns, c)
 	}
 	return err
@@ -275,7 +281,7 @@ func (srv *Server) Shutdown(ctx context.Context) error {
 // Serve always returns a non-nil error.
 func (srv *Server) Serve(l net.Listener) error {
 	srv.ensureHandlers()
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	if err := srv.ensureHostSigner(); err != nil {
 		return err
 	}
@@ -294,14 +300,14 @@ func (srv *Server) Serve(l net.Listener) error {
 				return ErrServerClosed
 			default:
 			}
-			if ne, ok := e.(net.Error); ok && ne.Temporary() {
+			if ne, ok := e.(net.Error); ok && ne.Temporary() { //nolint:staticcheck // SA1019: same pattern as net/http
 				if tempDelay == 0 {
 					tempDelay = 5 * time.Millisecond
 				} else {
 					tempDelay *= 2
 				}
-				if max := 1 * time.Second; tempDelay > max {
-					tempDelay = max
+				if limit := 1 * time.Second; tempDelay > limit {
+					tempDelay = limit
 				}
 				time.Sleep(tempDelay)
 				continue
@@ -312,12 +318,13 @@ func (srv *Server) Serve(l net.Listener) error {
 	}
 }
 
+// HandleConn handles a new SSH connection.
 func (srv *Server) HandleConn(newConn net.Conn) {
 	ctx, cancel := newContext(srv)
 	if srv.ConnCallback != nil {
 		cbConn := srv.ConnCallback(ctx, newConn)
 		if cbConn == nil {
-			newConn.Close()
+			_ = newConn.Close()
 			return
 		}
 		newConn = cbConn
@@ -334,7 +341,7 @@ func (srv *Server) HandleConn(newConn net.Conn) {
 		conn.handshakeDeadline = time.Now().Add(srv.HandshakeTimeout)
 	}
 	conn.updateDeadline()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	sshConn, chans, reqs, err := gossh.NewServerConn(conn, srv.config(ctx))
 	if err != nil {
 		if srv.ConnectionFailedCallback != nil {
@@ -345,28 +352,11 @@ func (srv *Server) HandleConn(newConn net.Conn) {
 	conn.handshakeDeadline = time.Time{}
 	conn.updateDeadline()
 
-	if sshConn.Permissions != nil {
-		// Now that the connection was authed, if the permissionsPublicKeyExt was
-		// attached, we need to re-parse it as a public key.
-		if keyData, ok := sshConn.Permissions.Extensions[permissionsPublicKeyExt]; ok {
-			decodedData, err := base64.StdEncoding.DecodeString(keyData)
-			if err != nil {
-				if srv.ConnectionFailedCallback != nil {
-					srv.ConnectionFailedCallback(conn, err)
-				}
-				return
-			}
-
-			key, err := gossh.ParsePublicKey(decodedData)
-			if err != nil {
-				if srv.ConnectionFailedCallback != nil {
-					srv.ConnectionFailedCallback(conn, err)
-				}
-				return
-			}
-
-			ctx.SetValue(ContextKeyPublicKey, key)
+	if err := extractPublicKeyFromPermissions(ctx, sshConn); err != nil {
+		if srv.ConnectionFailedCallback != nil {
+			srv.ConnectionFailedCallback(conn, err)
 		}
+		return
 	}
 
 	// Additionally, now that the connection was authed, we can take the
@@ -387,7 +377,7 @@ func (srv *Server) HandleConn(newConn net.Conn) {
 			handler = srv.ChannelHandlers["default"]
 		}
 		if handler == nil {
-			ch.Reject(gossh.UnknownChannelType, "unsupported channel type")
+			_ = ch.Reject(gossh.UnknownChannelType, "unsupported channel type")
 			continue
 		}
 		go handler(srv, sshConn, ch, ctx)
@@ -401,13 +391,13 @@ func (srv *Server) handleRequests(ctx Context, in <-chan *gossh.Request) {
 			handler = srv.RequestHandlers["default"]
 		}
 		if handler == nil {
-			req.Reply(false, nil)
+			_ = req.Reply(false, nil)
 			continue
 		}
 		/*reqCtx, cancel := context.WithCancel(ctx)
 		defer cancel() */
 		ret, payload := handler(ctx, srv, req)
-		req.Reply(ret, payload)
+		_ = req.Reply(ret, payload)
 	}
 }
 
@@ -534,4 +524,26 @@ func (srv *Server) trackConn(c *gossh.ServerConn, add bool) {
 		delete(srv.conns, c)
 		srv.connWg.Done()
 	}
+}
+
+// extractPublicKeyFromPermissions re-parses the public key from the
+// permissions extensions and stores it in the context.
+func extractPublicKeyFromPermissions(ctx Context, sshConn *gossh.ServerConn) error {
+	if sshConn.Permissions == nil {
+		return nil
+	}
+	keyData, ok := sshConn.Permissions.Extensions[permissionsPublicKeyExt]
+	if !ok {
+		return nil
+	}
+	decodedData, err := base64.StdEncoding.DecodeString(keyData)
+	if err != nil {
+		return err
+	}
+	key, err := gossh.ParsePublicKey(decodedData)
+	if err != nil {
+		return err
+	}
+	ctx.SetValue(ContextKeyPublicKey, key)
+	return nil
 }

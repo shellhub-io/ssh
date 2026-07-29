@@ -14,7 +14,7 @@ const (
 	forwardedTCPChannelType = "forwarded-tcpip"
 )
 
-// direct-tcpip data struct as specified in RFC4254, Section 7.2
+// direct-tcpip data struct as specified in RFC4254, Section 7.2.
 type localForwardChannelData struct {
 	DestAddr string
 	DestPort uint32
@@ -25,15 +25,15 @@ type localForwardChannelData struct {
 
 // DirectTCPIPHandler can be enabled by adding it to the server's
 // ChannelHandlers under direct-tcpip.
-func DirectTCPIPHandler(srv *Server, conn *gossh.ServerConn, newChan gossh.NewChannel, ctx Context) {
+func DirectTCPIPHandler(srv *Server, _ *gossh.ServerConn, newChan gossh.NewChannel, ctx Context) {
 	d := localForwardChannelData{}
 	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
-		newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
+		_ = newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
 		return
 	}
 
 	if srv.LocalPortForwardingCallback == nil || !srv.LocalPortForwardingCallback(ctx, d.DestAddr, d.DestPort) {
-		newChan.Reject(gossh.Prohibited, "port forwarding is disabled")
+		_ = newChan.Reject(gossh.Prohibited, "port forwarding is disabled")
 		return
 	}
 
@@ -42,26 +42,26 @@ func DirectTCPIPHandler(srv *Server, conn *gossh.ServerConn, newChan gossh.NewCh
 	var dialer net.Dialer
 	dconn, err := dialer.DialContext(ctx, "tcp", dest)
 	if err != nil {
-		newChan.Reject(gossh.ConnectionFailed, err.Error())
+		_ = newChan.Reject(gossh.ConnectionFailed, err.Error())
 		return
 	}
 
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
-		dconn.Close()
+		_ = dconn.Close()
 		return
 	}
 	go gossh.DiscardRequests(reqs)
 
 	go func() {
-		defer ch.Close()
-		defer dconn.Close()
-		io.Copy(ch, dconn)
+		defer func() { _ = ch.Close() }()
+		defer func() { _ = dconn.Close() }()
+		_, _ = io.Copy(ch, dconn)
 	}()
 	go func() {
-		defer ch.Close()
-		defer dconn.Close()
-		io.Copy(dconn, ch)
+		defer func() { _ = ch.Close() }()
+		defer func() { _ = dconn.Close() }()
+		_, _ = io.Copy(dconn, ch)
 	}()
 }
 
@@ -94,6 +94,8 @@ type ForwardedTCPHandler struct {
 	sync.Mutex
 }
 
+// HandleSSHRequest handles the tcpip-forward and cancel-tcpip-forward
+// global requests.
 func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *gossh.Request) (bool, []byte) {
 	h.Lock()
 	if h.forwards == nil {
@@ -128,7 +130,7 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 			ln, ok := h.forwards[addr]
 			h.Unlock()
 			if ok {
-				ln.Close()
+				_ = ln.Close()
 			}
 		}()
 		go func() {
@@ -151,19 +153,19 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 					if err != nil {
 						// TODO: log failure to open channel
 						log.Println(err)
-						c.Close()
+						_ = c.Close()
 						return
 					}
 					go gossh.DiscardRequests(reqs)
 					go func() {
-						defer ch.Close()
-						defer c.Close()
-						io.Copy(ch, c)
+						defer func() { _ = ch.Close() }()
+						defer func() { _ = c.Close() }()
+						_, _ = io.Copy(ch, c)
 					}()
 					go func() {
-						defer ch.Close()
-						defer c.Close()
-						io.Copy(c, ch)
+						defer func() { _ = ch.Close() }()
+						defer func() { _ = c.Close() }()
+						_, _ = io.Copy(c, ch)
 					}()
 				}()
 			}
@@ -184,7 +186,7 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 		ln, ok := h.forwards[addr]
 		h.Unlock()
 		if ok {
-			ln.Close()
+			_ = ln.Close()
 		}
 		return true, nil
 	default:
