@@ -181,7 +181,10 @@ func (ctx *sshContext) RemoteAddr() net.Addr {
 }
 
 func (ctx *sshContext) LocalAddr() net.Addr {
-	return ctx.Value(ContextKeyLocalAddr).(net.Addr)
+	if addr, ok := ctx.Value(ContextKeyLocalAddr).(net.Addr); ok {
+		return addr
+	}
+	return nil
 }
 
 func (ctx *sshContext) Permissions() *Permissions {

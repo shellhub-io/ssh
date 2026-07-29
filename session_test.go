@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
-	"time"
 
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -261,7 +263,6 @@ func TestPtyWriter(t *testing.T) {
 	session, _, cleanup := newTestSession(t, &Server{
 		Handler: func(s Session) {
 			_, _ = fmt.Fprintln(s, "foo\nbar")
-			time.Sleep(10 * time.Millisecond)
 			_, _ = fmt.Fprintln(s.Stderr(), "many\nerrors")
 			_ = s.Exit(0)
 		},
@@ -275,9 +276,18 @@ func TestPtyWriter(t *testing.T) {
 		t.Fatalf("expected nil but got %v", err)
 	}
 
-	expected := "foo\r\nbar\r\nmany\r\nerrors\r\n"
-	if expected != string(bts) {
-		t.Fatalf("expected output to be %q, got %q", expected, string(bts))
+	// CombinedOutput copies stdout and stderr in separate goroutines, so the
+	// order between the two streams is not guaranteed. Assert on the set of
+	// lines and on the \n -> \r\n conversion instead of the exact sequence.
+	lines := strings.Split(string(bts), "\r\n")
+	if lines[len(lines)-1] != "" {
+		t.Fatalf("expected output to end with %q, got %q", "\r\n", string(bts))
+	}
+	lines = lines[:len(lines)-1]
+	sort.Strings(lines)
+	expected := []string{"bar", "errors", "foo", "many"}
+	if !reflect.DeepEqual(expected, lines) {
+		t.Fatalf("expected output lines to be %q, got %q", expected, lines)
 	}
 }
 
