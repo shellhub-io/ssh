@@ -1,22 +1,26 @@
-name: Build
+name: build
 
 on:
   push:
+    branches:
+      - "master"
   pull_request:
 
 jobs:
   build:
     uses: charmbracelet/meta/.github/workflows/build.yml@main
+    secrets:
+      gh_pat: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
   codecov:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: "stable"
           cache: true
       - run: go test -failfast -race -coverpkg=./... -covermode=atomic -coverprofile=coverage.txt ./... -timeout 5m
-      - uses: codecov/codecov-action@v3
+      - uses: codecov/codecov-action@v6
         with:
           file: ./coverage.txt
