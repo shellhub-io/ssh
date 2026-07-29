@@ -6,7 +6,7 @@ import (
 	"io"
 	"log"
 
-	"github.com/charmbracelet/ssh"
+	"charm.land/ssh"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"

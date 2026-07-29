@@ -4,7 +4,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/charmbracelet/ssh"
+	"charm.land/ssh"
 )
 
 var (

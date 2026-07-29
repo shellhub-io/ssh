@@ -2,10 +2,9 @@
 
 <p>
     <a href="https://github.com/charmbracelet/ssh/releases"><img src="https://img.shields.io/github/release/charmbracelet/ssh.svg" alt="Latest Release"></a>
-    <a href="https://pkg.go.dev/github.com/charmbracelet/ssh?tab=doc"><img src="https://godoc.org/github.com/golang/gddo?status.svg" alt="GoDoc"></a>
+    <a href="https://pkg.go.dev/charm.land/ssh?tab=doc"><img src="https://godoc.org/github.com/golang/gddo?status.svg" alt="GoDoc"></a>
     <a href="https://github.com/charmbracelet/ssh/actions"><img src="https://github.com/charmbracelet/ssh/workflows/build/badge.svg" alt="Build Status"></a>
     <a href="https://codecov.io/gh/charmbracelet/ssh"><img alt="Codecov branch" src="https://img.shields.io/codecov/c/github/charmbracelet/ssh/master.svg"></a>
-    <a href="https://goreportcard.com/report/github.com/charmbracelet/ssh"><img alt="Go Report Card" src="https://goreportcard.com/badge/github.com/charmbracelet/ssh"></a>
 </p>
 
 An SSH server library for Go. `ssh` wraps the lower-level
@@ -19,7 +18,7 @@ import (
 	"io"
 	"log"
 
-	"github.com/charmbracelet/ssh"
+	"charm.land/ssh"
 )
 
 func main() {
@@ -46,7 +45,7 @@ A bunch of great examples are in the [`_examples`](_examples) directory.
 
 ## Usage
 
-[See the GoDoc reference.](https://pkg.go.dev/github.com/charmbracelet/ssh)
+[See the GoDoc reference.](https://pkg.go.dev/charm.land/ssh)
 
 ## Feedback
 

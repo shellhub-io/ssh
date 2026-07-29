@@ -5,7 +5,7 @@ import (
 	"io"
 	"log"
 
-	"github.com/charmbracelet/ssh"
+	"charm.land/ssh"
 )
 
 func main() {

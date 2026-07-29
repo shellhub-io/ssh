@@ -1,4 +1,4 @@
-module github.com/charmbracelet/ssh
+module charm.land/ssh
 
 go 1.23.0
 
