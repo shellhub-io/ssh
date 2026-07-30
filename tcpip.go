@@ -121,6 +121,9 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 		}
 		_, destPortStr, _ := net.SplitHostPort(ln.Addr().String())
 		destPort, _ := strconv.Atoi(destPortStr)
+		// Use the actual bound port as the map key so that port 0
+		// requests don't collide.
+		addr = net.JoinHostPort(reqPayload.BindAddr, destPortStr)
 		h.Lock()
 		h.forwards[addr] = ln
 		h.Unlock()
