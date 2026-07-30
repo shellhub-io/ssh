@@ -74,6 +74,7 @@ func (i *impl) start(c *exec.Cmd) error {
 		donec <- result{state, err}
 	}()
 	go func() {
+		defer windows.CloseHandle(windows.Handle(process)) //nolint:errcheck
 		select {
 		case <-i.Done():
 			c.Err = windows.TerminateProcess(windows.Handle(process), 1)
