@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pires/go-proxyproto"
@@ -96,6 +98,7 @@ type Server struct {
 
 	listenerWg sync.WaitGroup
 	mu         sync.RWMutex
+	started    atomic.Bool
 	listeners  map[net.Listener]struct{}
 	conns      map[*gossh.ServerConn]struct{}
 	connWg     sync.WaitGroup
@@ -305,6 +308,7 @@ func (srv *Server) Serve(l net.Listener) error {
 	var tempDelay time.Duration
 
 	srv.trackListener(l, true)
+	srv.started.Store(true)
 	defer srv.trackListener(l, false)
 	for {
 		conn, e := l.Accept()
@@ -460,7 +464,12 @@ func (srv *Server) AddHostKey(key Signer) {
 }
 
 // SetOption runs a functional option against the server.
+// It returns an error if the server has already been started.
 func (srv *Server) SetOption(option Option) error {
+	if srv.started.Load() {
+		return fmt.Errorf("ssh: cannot set option after server has started")
+	}
+
 	// NOTE: there is a potential race here for any option that doesn't call an
 	// internal method. We can't actually lock here because if something calls
 	// (as an example) AddHostKey, it will deadlock.
