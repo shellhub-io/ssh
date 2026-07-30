@@ -35,7 +35,7 @@ func (i *impl) Close() error {
 	return nil
 }
 
-func (*impl) start(*exec.Cmd) error {
+func (*impl) start(*exec.Cmd, ptyStartConfig) error {
 	return ErrUnsupported
 }
 

@@ -43,7 +43,7 @@ func (i *impl) Close() error {
 	return i.ConPty.Close()
 }
 
-func (i *impl) start(c *exec.Cmd) error {
+func (i *impl) start(c *exec.Cmd, _ ptyStartConfig) error {
 	pid, process, err := i.Spawn(c.Path, c.Args, &syscall.ProcAttr{
 		Dir: c.Dir,
 		Env: c.Env,

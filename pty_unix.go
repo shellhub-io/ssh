@@ -62,13 +62,15 @@ func (i *impl) Resize(w int, h int) (rErr error) {
 	})
 }
 
-func (i *impl) start(c *exec.Cmd) error {
+func (i *impl) start(c *exec.Cmd, cfg ptyStartConfig) error {
 	c.Stdin, c.Stdout, c.Stderr = i.Slave, i.Slave, i.Slave
-	if c.SysProcAttr == nil {
-		c.SysProcAttr = &syscall.SysProcAttr{}
+	if cfg.jobControl {
+		if c.SysProcAttr == nil {
+			c.SysProcAttr = &syscall.SysProcAttr{}
+		}
+		c.SysProcAttr.Setsid = true
+		c.SysProcAttr.Setctty = true
 	}
-	c.SysProcAttr.Setsid = true
-	c.SysProcAttr.Setctty = true
 	return c.Start()
 }
 

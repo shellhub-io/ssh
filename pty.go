@@ -61,11 +61,36 @@ func (rw readWriterDelegate) Write(p []byte) (n int, err error) {
 	return rw.w.Write(p)
 }
 
+// PtyStartOption configures how Pty.Start runs a command.
+type PtyStartOption func(*ptyStartConfig)
+
+type ptyStartConfig struct {
+	jobControl bool
+}
+
+// WithJobControl enables job control when starting the command: on Unix,
+// the command is put in its own session with the PTY slave as its
+// controlling terminal, so interactive shells get working signal handling
+// (e.g. ^C, ^Z).
+//
+// Leave it disabled (the default) when running multiple commands
+// sequentially against the same PTY, or when managing the command's process
+// attributes yourself via exec.Cmd.SysProcAttr.
+func WithJobControl() PtyStartOption {
+	return func(c *ptyStartConfig) {
+		c.jobControl = true
+	}
+}
+
 // Start starts a *exec.Cmd attached to the Session. If a PTY is allocated,
 // it will use that for I/O.
 // On Windows, the process execution lifecycle is not managed by Go and has to
 // be managed manually. This means that c.Wait() won't work.
 // See https://github.com/charmbracelet/x/blob/main/exp/term/conpty/conpty_windows.go
-func (p *Pty) Start(c *exec.Cmd) error {
-	return p.start(c)
+func (p *Pty) Start(c *exec.Cmd, opts ...PtyStartOption) error {
+	cfg := ptyStartConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return p.start(c, cfg)
 }
