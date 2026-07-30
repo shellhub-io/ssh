@@ -67,6 +67,6 @@ This package was originally forked from [gliderlabs/ssh](https://github.com/glid
 
 Part of [Charm](https://charm.land).
 
-<a href="https://charm.land/"><img alt="The Charm logo" src="https://stuff.charm.sh/charm-banner-next.jpg" width="400"></a>
+<a href="https://charm.land/"><img alt="The Charm logo" src="https://stuff.charm.sh/charm-banner-softy.jpg" width="400"></a>
 
 Charm热爱开源 • Charm loves open source
