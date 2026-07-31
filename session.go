@@ -273,19 +273,26 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 			_ = req.Reply(true, nil)
 
 			go func() {
+				// Closed from a defer so the pty is still released when the
+				// handler panics, rather than trading a crash for a leak.
+				if sess.pty != nil && !sess.pty.IsZero() {
+					defer func() { _ = sess.pty.Close() }()
+				}
+				defer recoverAndLog("panic in session handler", nil, func() {
+					_ = sess.Exit(1)
+				})
 				if sess.pty != nil && !sess.pty.IsZero() {
 					go func() {
+						defer recoverAndLog("panic copying to pty", nil, nil)
 						_, _ = io.Copy(sess.pty, sess)
 					}()
 					go func() {
+						defer recoverAndLog("panic copying from pty", nil, nil)
 						_, _ = io.Copy(sess, sess.pty)
 					}()
 				}
 				sess.handler(sess)
 				_ = sess.Exit(0)
-				if sess.pty != nil && !sess.pty.IsZero() {
-					_ = sess.pty.Close()
-				}
 			}()
 		case "subsystem":
 			if sess.handled {
@@ -318,6 +325,9 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 			_ = req.Reply(true, nil)
 
 			go func() {
+				defer recoverAndLog("panic in subsystem handler", nil, func() {
+					_ = sess.Exit(1)
+				})
 				handler(sess)
 				_ = sess.Exit(0)
 			}()
@@ -376,6 +386,7 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 
 				if !sess.EmulatedPty() && !sess.pty.IsZero() {
 					go func() {
+						defer recoverAndLog("panic resizing pty", nil, nil)
 						for win := range sess.winch {
 							if err := resizePty(sess, win); err != nil {
 								// TODO: handle error

@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -337,7 +339,64 @@ func (srv *Server) Serve(l net.Listener) error {
 }
 
 // HandleConn handles a new SSH connection.
+//
+// A panic while handling the connection is recovered and logged rather than
+// allowed to escape. Connections are served on their own goroutine, and Go has
+// no process-wide panic handler, so an unrecovered panic here would terminate
+// the whole server process along with every other connection. That includes
+// panics raised inside the SSH handshake, before authentication has happened,
+// which would otherwise let an unauthenticated client take the server down.
 func (srv *Server) HandleConn(newConn net.Conn) {
+	defer recoverAndLog("panic serving connection", newConn, func() {
+		// The deferred close inside handleConn did not get to run.
+		_ = newConn.Close()
+	})
+
+	srv.handleConn(newConn)
+}
+
+// recoverAndLog recovers a panic on the current goroutine, logs it with a
+// stack trace, and runs cleanup if one is given.
+//
+// This must be deferred directly on the goroutine to be protected: a recover
+// only sees panics unwinding its own stack, so every goroutine the server
+// starts needs its own call.
+func recoverAndLog(msg string, conn net.Conn, cleanup func()) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	slog.Error("ssh: "+msg,
+		"remote", remoteAddrString(conn),
+		"panic", r,
+		"stack", string(debug.Stack()),
+	)
+	if cleanup != nil {
+		// Cleanup runs while already unwinding a panic, so a second panic
+		// raised here would escape this recover and kill the process, undoing
+		// the containment. Contain it separately.
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("ssh: panic during "+msg+" cleanup", "panic", r)
+			}
+		}()
+		cleanup()
+	}
+}
+
+// remoteAddrString returns conn's remote address for logging, tolerating a nil
+// conn or address so that the panic handler cannot itself panic.
+func remoteAddrString(conn net.Conn) string {
+	if conn == nil {
+		return "unknown"
+	}
+	if addr := conn.RemoteAddr(); addr != nil {
+		return addr.String()
+	}
+	return "unknown"
+}
+
+func (srv *Server) handleConn(newConn net.Conn) {
 	ctx, cancel := newContext(srv)
 	if srv.ConnCallback != nil {
 		cbConn := srv.ConnCallback(ctx, newConn)
@@ -393,7 +452,10 @@ func (srv *Server) HandleConn(newConn net.Conn) {
 	ctx.SetValue(ContextKeyConn, sshConn)
 	applyConnMetadata(ctx, sshConn)
 	// go gossh.DiscardRequests(reqs)
-	go srv.handleRequests(ctx, reqs)
+	go func() {
+		defer recoverAndLog("panic handling requests", conn, nil)
+		srv.handleRequests(ctx, reqs)
+	}()
 	for ch := range chans {
 		handler := srv.ChannelHandlers[ch.ChannelType()]
 		if handler == nil {
@@ -403,7 +465,10 @@ func (srv *Server) HandleConn(newConn net.Conn) {
 			_ = ch.Reject(gossh.UnknownChannelType, "unsupported channel type")
 			continue
 		}
-		go handler(srv, sshConn, ch, ctx)
+		go func(ch gossh.NewChannel) {
+			defer recoverAndLog("panic handling channel", conn, nil)
+			handler(srv, sshConn, ch, ctx)
+		}(ch)
 	}
 }
 
