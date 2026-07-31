@@ -54,11 +54,13 @@ func DirectTCPIPHandler(srv *Server, _ *gossh.ServerConn, newChan gossh.NewChann
 	go gossh.DiscardRequests(reqs)
 
 	go func() {
+		defer recoverAndLog("panic proxying forwarded connection", nil, nil)
 		defer func() { _ = ch.Close() }()
 		defer func() { _ = dconn.Close() }()
 		_, _ = io.Copy(ch, dconn)
 	}()
 	go func() {
+		defer recoverAndLog("panic proxying forwarded connection", nil, nil)
 		defer func() { _ = ch.Close() }()
 		defer func() { _ = dconn.Close() }()
 		_, _ = io.Copy(dconn, ch)
@@ -152,6 +154,9 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 					OriginPort: uint32(originPort),
 				})
 				go func() {
+					defer recoverAndLog("panic opening forwarded channel", nil, func() {
+						_ = c.Close()
+					})
 					ch, reqs, err := conn.OpenChannel(forwardedTCPChannelType, payload)
 					if err != nil {
 						slog.Warn("ssh: failed to open forwarded channel", "err", err)
@@ -160,11 +165,13 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 					}
 					go gossh.DiscardRequests(reqs)
 					go func() {
+						defer recoverAndLog("panic proxying forwarded channel", nil, nil)
 						defer func() { _ = ch.Close() }()
 						defer func() { _ = c.Close() }()
 						_, _ = io.Copy(ch, c)
 					}()
 					go func() {
+						defer recoverAndLog("panic proxying forwarded channel", nil, nil)
 						defer func() { _ = ch.Close() }()
 						defer func() { _ = c.Close() }()
 						_, _ = io.Copy(c, ch)

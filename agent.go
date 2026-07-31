@@ -58,6 +58,7 @@ func ForwardAgentConnections(l net.Listener, s Session) {
 			return
 		}
 		go func(conn net.Conn) {
+			defer recoverAndLog("panic forwarding agent connection", nil, nil)
 			defer func() { _ = conn.Close() }()
 			channel, reqs, err := sshConn.OpenChannel(agentChannelType, nil)
 			if err != nil {
@@ -68,14 +69,20 @@ func ForwardAgentConnections(l net.Listener, s Session) {
 			var wg sync.WaitGroup
 			wg.Add(2)
 			go func() {
+				// Done is deferred ahead of the recover so that it runs even
+				// if the copy panics. Otherwise the recover would turn a crash
+				// into a permanently blocked Wait below, leaking this
+				// goroutine along with the socket and the channel.
+				defer wg.Done()
+				defer recoverAndLog("panic proxying agent connection", nil, nil)
 				_, _ = io.Copy(conn, channel)
 				_ = conn.(*net.UnixConn).CloseWrite()
-				wg.Done()
 			}()
 			go func() {
+				defer wg.Done()
+				defer recoverAndLog("panic proxying agent connection", nil, nil)
 				_, _ = io.Copy(channel, conn)
 				_ = channel.CloseWrite()
-				wg.Done()
 			}()
 			wg.Wait()
 		}(conn)
