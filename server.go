@@ -173,13 +173,17 @@ func (srv *Server) config(ctx Context) *gossh.ServerConfig {
 			return srv.Banner
 		}
 	}
-	if srv.BannerHandler != nil {
+	// The handler overlays below only apply when ServerConfigCallback left the
+	// matching callback unset. A caller that reaches for ServerConfigCallback is
+	// asking for control of the raw config, and silently discarding what it
+	// installed there hides the callback that actually runs.
+	if srv.BannerHandler != nil && config.BannerCallback == nil {
 		config.BannerCallback = func(conn gossh.ConnMetadata) string {
 			applyConnMetadata(ctx, conn)
 			return srv.BannerHandler(ctx)
 		}
 	}
-	if srv.PasswordHandler != nil {
+	if srv.PasswordHandler != nil && config.PasswordCallback == nil {
 		config.PasswordCallback = func(conn gossh.ConnMetadata, password []byte) (*gossh.Permissions, error) {
 			resetPermissions(ctx)
 			applyConnMetadata(ctx, conn)
@@ -194,7 +198,7 @@ func (srv *Server) config(ctx Context) *gossh.ServerConfig {
 			return ctx.Permissions().Permissions, nil
 		}
 	}
-	if srv.PublicKeyHandler != nil {
+	if srv.PublicKeyHandler != nil && config.PublicKeyCallback == nil {
 		config.PublicKeyCallback = func(conn gossh.ConnMetadata, key gossh.PublicKey) (*gossh.Permissions, error) {
 			resetPermissions(ctx)
 			applyConnMetadata(ctx, conn)
@@ -216,7 +220,7 @@ func (srv *Server) config(ctx Context) *gossh.ServerConfig {
 			return ctx.Permissions().Permissions, nil
 		}
 	}
-	if srv.KeyboardInteractiveHandler != nil {
+	if srv.KeyboardInteractiveHandler != nil && config.KeyboardInteractiveCallback == nil {
 		config.KeyboardInteractiveCallback = func(conn gossh.ConnMetadata, challenger gossh.KeyboardInteractiveChallenge) (*gossh.Permissions, error) {
 			resetPermissions(ctx)
 			applyConnMetadata(ctx, conn)
