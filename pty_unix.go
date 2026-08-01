@@ -71,6 +71,13 @@ func (i *impl) start(c *exec.Cmd, cfg ptyStartConfig) error {
 		c.SysProcAttr.Setsid = true
 		c.SysProcAttr.Setctty = true
 	}
+	if cfg.owner != nil {
+		// Chown by path, not by fd: the slave's ownership lives on the devpts
+		// node, and fchown on this descriptor does not reach it.
+		if err := os.Chown(i.Slave.Name(), *cfg.owner, -1); err != nil {
+			return err
+		}
+	}
 	return c.Start()
 }
 

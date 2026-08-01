@@ -66,6 +66,18 @@ type PtyStartOption func(*ptyStartConfig)
 
 type ptyStartConfig struct {
 	jobControl bool
+	owner      *int
+}
+
+// WithOwner hands the PTY slave to the given uid before the command starts.
+//
+// A server that switches the command to another user needs this: the slave is
+// created owned by whoever runs the server, so without it the command cannot
+// write to its own terminal. The group is left alone.
+func WithOwner(uid int) PtyStartOption {
+	return func(c *ptyStartConfig) {
+		c.owner = &uid
+	}
 }
 
 // WithJobControl enables job control when starting the command: on Unix,
