@@ -28,18 +28,30 @@ func (i *impl) Name() string {
 }
 
 func (i *impl) Read(p []byte) (n int, err error) {
+	if i.ConPty == nil {
+		return 0, ErrUnsupported
+	}
 	return i.ConPty.Read(p)
 }
 
 func (i *impl) Write(p []byte) (n int, err error) {
+	if i.ConPty == nil {
+		return 0, ErrUnsupported
+	}
 	return i.ConPty.Write(p)
 }
 
 func (i *impl) Resize(w int, h int) error {
+	if i.ConPty == nil {
+		return ErrUnsupported
+	}
 	return i.ConPty.Resize(w, h)
 }
 
 func (i *impl) Close() error {
+	if i.ConPty == nil {
+		return nil
+	}
 	return i.ConPty.Close()
 }
 

@@ -26,22 +26,36 @@ func (i *impl) IsZero() bool {
 	return i.Master == nil && i.Slave == nil
 }
 
-// Name returns the name of the slave PTY.
+// Name returns the name of the slave PTY, or the empty string when nothing was
+// allocated. Pty() reports true while emulating, so callers reach these
+// accessors on a Pty that has no files behind it.
 func (i *impl) Name() string {
+	if i.Slave == nil {
+		return ""
+	}
 	return i.Slave.Name()
 }
 
 // Read implements ptyInterface.
 func (i *impl) Read(p []byte) (n int, err error) {
+	if i.Master == nil {
+		return 0, ErrUnsupported
+	}
 	return i.Master.Read(p)
 }
 
 // Write implements ptyInterface.
 func (i *impl) Write(p []byte) (n int, err error) {
+	if i.Master == nil {
+		return 0, ErrUnsupported
+	}
 	return i.Master.Write(p)
 }
 
 func (i *impl) Close() error {
+	if i.Master == nil && i.Slave == nil {
+		return nil
+	}
 	if err := i.Master.Close(); err != nil {
 		return err
 	}
@@ -49,6 +63,9 @@ func (i *impl) Close() error {
 }
 
 func (i *impl) Resize(w int, h int) (rErr error) {
+	if i.Master == nil {
+		return ErrUnsupported
+	}
 	conn, err := i.Master.SyscallConn()
 	if err != nil {
 		return err
