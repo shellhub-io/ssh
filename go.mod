@@ -1,4 +1,4 @@
-module charm.land/ssh
+module github.com/gliderlabs/ssh
 
 go 1.25.0
 

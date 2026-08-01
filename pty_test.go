@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"charm.land/ssh"
+	"github.com/gliderlabs/ssh"
 )
 
 func TestNewPtyWriter(t *testing.T) {
