@@ -106,11 +106,19 @@ func EmulatePty() Option {
 // specific PTY implementation defined in pty_*.go.
 func AllocatePty() Option {
 	return func(s *Server) error {
-		s.PtyHandler = func(_ Context, s Session, pty Pty) (func() error, error) {
-			return s.(*session).ptyAllocate(pty.Term, pty.Window, pty.Modes)
-		}
+		s.PtyHandler = AllocatePtyHandler
 		return nil
 	}
+}
+
+// AllocatePtyHandler allocates a real PTY for the session. It is what
+// AllocatePty installs, exported so a caller can wrap it.
+//
+// Wrapping is the only way to see an allocation failure: the request loop
+// refuses the pty-req and carries on, so a server that wants to log why, or to
+// refuse the session outright, has to observe the error here.
+func AllocatePtyHandler(_ Context, s Session, pty Pty) (func() error, error) {
+	return s.(*session).ptyAllocate(pty.Term, pty.Window, pty.Modes)
 }
 
 // EnableProxyProtocol returns a functional option that sets EnableProxyProtocol on the server.
