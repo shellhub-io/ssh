@@ -383,12 +383,8 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 			if sess.ptyHandler != nil {
 				closer, err := sess.ptyHandler(sess.ctx, sess, ptyReq)
 				if err != nil {
-					// Undo what the pty-req set up, or the session stops
-					// answering: winch is buffered to one and already holds the
-					// initial size, so the next window-change would block this
-					// loop forever. Clearing pty first makes window-change take
-					// its nil branch instead of sending here again; both run on
-					// this goroutine, so nothing can slip in between.
+					// Undo the pty-req setup, or window-change keeps sending on
+					// a winch nobody drains and wedges the loop.
 					sess.Lock()
 					sess.pty = nil
 					sess.Unlock()
@@ -427,6 +423,12 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 				sess.Lock()
 				sess.pty.Window = win
 				sess.Unlock()
+				// A queued size nobody took is stale, and blocking on it wedges
+				// the loop. This is the only sender, so the send cannot block.
+				select {
+				case <-sess.winch:
+				default:
+				}
 				sess.winch <- win
 			}
 			_ = req.Reply(ok, nil)
