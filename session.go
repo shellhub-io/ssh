@@ -218,6 +218,8 @@ func (sess *session) EmulatedPty() bool {
 }
 
 func (sess *session) Pty() (Pty, <-chan Window, bool) {
+	sess.Lock()
+	defer sess.Unlock()
 	if sess.pty != nil && (sess.EmulatedPty() || !sess.pty.IsZero()) {
 		return *sess.pty, sess.winch, true
 	}
@@ -370,8 +372,12 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 				}
 			}
 
+			// The request loop writes pty and winch while the user's handler
+			// reads them through Pty() on its own goroutine.
+			sess.Lock()
 			sess.pty = &ptyReq
 			sess.winch = make(chan Window, 1)
+			sess.Unlock()
 			sess.winch <- ptyReq.Window
 
 			if sess.ptyHandler != nil {
@@ -409,7 +415,9 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 			}
 			win, _, ok := parseWindow(req.Payload)
 			if ok {
+				sess.Lock()
 				sess.pty.Window = win
+				sess.Unlock()
 				sess.winch <- win
 			}
 			_ = req.Reply(ok, nil)
