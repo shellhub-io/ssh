@@ -470,7 +470,13 @@ func (srv *Server) handleConn(newConn net.Conn) {
 			continue
 		}
 		go func(ch gossh.NewChannel) {
-			defer recoverAndLog("panic handling channel", conn, nil)
+			// Reject on the way out so a panicking handler does not leave the
+			// client waiting on a reply that is never coming. Once the handler
+			// has accepted, Reject only reports that the channel was already
+			// decided, so this is safe either way.
+			defer recoverAndLog("panic handling channel "+ch.ChannelType(), conn, func() {
+				_ = ch.Reject(gossh.ConnectionFailed, "internal error")
+			})
 			handler(srv, sshConn, ch, ctx)
 		}(ch)
 	}
