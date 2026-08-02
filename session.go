@@ -245,6 +245,16 @@ func (sess *session) Break(c chan<- bool) {
 	sess.breakCh = c
 }
 
+// releaseUnhandledPty closes the pty unless a handler took it over. Once shell
+// or exec is accepted the handler goroutine owns it and releases it itself, and
+// closing here as well can pull the slave out from under a command that is
+// still starting. A pty-req that never became a shell has no other owner.
+func (sess *session) releaseUnhandledPty(closer func() error) {
+	if !sess.handled {
+		_ = closer()
+	}
+}
+
 func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 	for req := range reqs {
 		switch req.Type {
@@ -393,17 +403,7 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 					continue
 				}
 
-				defer func() { //nolint:staticcheck // intentional: runs when req channel closes
-					// Once shell or exec is accepted the handler goroutine owns
-					// the pty and releases it on its own. Closing here too can
-					// pull the slave out from under a command that is still
-					// starting, which the race detector sees against cmd.Start
-					// reading its descriptor. A pty-req that never became a
-					// shell has no other owner, so it still needs this.
-					if !sess.handled {
-						_ = closer()
-					}
-				}()
+				defer sess.releaseUnhandledPty(closer) //nolint:staticcheck // intentional: runs when req channel closes
 
 				if !sess.EmulatedPty() && !sess.pty.IsZero() {
 					go func() {
