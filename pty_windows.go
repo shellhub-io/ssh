@@ -56,6 +56,10 @@ func (i *impl) Close() error {
 }
 
 func (i *impl) start(c *exec.Cmd, _ ptyStartConfig) error {
+	if i.ConPty == nil {
+		return ErrUnsupported
+	}
+
 	pid, process, err := i.Spawn(c.Path, c.Args, &syscall.ProcAttr{
 		Dir: c.Dir,
 		Env: c.Env,

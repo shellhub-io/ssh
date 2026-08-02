@@ -80,6 +80,13 @@ func (i *impl) Resize(w int, h int) (rErr error) {
 }
 
 func (i *impl) start(c *exec.Cmd, cfg ptyStartConfig) error {
+	if i.Slave == nil {
+		// Assigning a nil *os.File here would hand the child a closed 0, 1 and
+		// 2 and still report success, so the caller gets a command that answers
+		// nothing rather than an error it can act on.
+		return ErrUnsupported
+	}
+
 	c.Stdin, c.Stdout, c.Stderr = i.Slave, i.Slave, i.Slave
 	if cfg.jobControl {
 		if c.SysProcAttr == nil {
