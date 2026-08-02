@@ -6,11 +6,11 @@ import (
 	"io"
 	"log"
 
+	"charm.land/ssh"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/gliderlabs/ssh"
 )
 
 func main() {
@@ -38,7 +38,7 @@ func main() {
 	})
 
 	log.Println("starting ssh server on port 2222...")
-	log.Fatal(ssh.ListenAndServe(":2222", nil))
+	log.Fatal(ssh.ListenAndServe("localhost:2222", nil))
 }
 
 func dockerRun(cfg *container.Config, sess ssh.Session) (status int64, cleanup func(), err error) {

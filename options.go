@@ -42,6 +42,8 @@ func HostKeyFile(filepath string) Option {
 	}
 }
 
+// KeyboardInteractiveAuth returns a functional option that sets the
+// keyboard-interactive authentication handler.
 func KeyboardInteractiveAuth(fn KeyboardInteractiveHandler) Option {
 	return func(srv *Server) error {
 		srv.KeyboardInteractiveHandler = fn
@@ -68,7 +70,7 @@ func HostKeyPEM(bytes []byte) Option {
 // denying PTY requests.
 func NoPty() Option {
 	return func(srv *Server) error {
-		srv.PtyCallback = func(ctx Context, pty Pty) bool {
+		srv.PtyCallback = func(Context, Pty) bool {
 			return false
 		}
 		return nil
@@ -79,6 +81,50 @@ func NoPty() Option {
 func WrapConn(fn ConnCallback) Option {
 	return func(srv *Server) error {
 		srv.ConnCallback = fn
+		return nil
+	}
+}
+
+var contextKeyEmulatePty = &contextKey{"emulate-pty"}
+
+func emulatePtyHandler(ctx Context, _ Session, _ Pty) (func() error, error) {
+	ctx.SetValue(contextKeyEmulatePty, true)
+	return func() error { return nil }, nil
+}
+
+// EmulatePty returns a functional option that fakes a PTY. It uses PtyWriter
+// underneath.
+func EmulatePty() Option {
+	return func(s *Server) error {
+		s.PtyHandler = emulatePtyHandler
+		return nil
+	}
+}
+
+// AllocatePty returns a functional option that allocates a PTY. Implementers
+// who wish to use an actual PTY should use this along with the platform
+// specific PTY implementation defined in pty_*.go.
+func AllocatePty() Option {
+	return func(s *Server) error {
+		s.PtyHandler = AllocatePtyHandler
+		return nil
+	}
+}
+
+// AllocatePtyHandler allocates a real PTY for the session. It is what
+// AllocatePty installs, exported so a caller can wrap it.
+//
+// Wrapping is the only way to see an allocation failure: the request loop
+// refuses the pty-req and carries on, so a server that wants to log why, or to
+// refuse the session outright, has to observe the error here.
+func AllocatePtyHandler(_ Context, s Session, pty Pty) (func() error, error) {
+	return s.(*session).ptyAllocate(pty.Term, pty.Window, pty.Modes)
+}
+
+// EnableProxyProtocol returns a functional option that sets EnableProxyProtocol on the server.
+func EnableProxyProtocol() Option {
+	return func(srv *Server) error {
+		srv.EnableProxyProtocol = true
 		return nil
 	}
 }

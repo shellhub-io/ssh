@@ -55,6 +55,10 @@ var (
 	// ContextKeyPublicKey is a context key for use with Contexts in this package.
 	// The associated value will be of type PublicKey.
 	ContextKeyPublicKey = &contextKey{"public-key"}
+
+	// ContextKeySession is a context key for use with Contexts in this package.
+	// The associated value will be of type Session.
+	ContextKeySession = &contextKey{"session"}
 )
 
 // Context is a package specific context interface. It exposes connection
@@ -99,25 +103,41 @@ type sshContext struct {
 	valuesMu sync.Mutex
 }
 
+var _ context.Context = &sshContext{}
+
+var _ sync.Locker = &sshContext{}
+
 func newContext(srv *Server) (*sshContext, context.CancelFunc) {
 	innerCtx, cancel := context.WithCancel(context.Background())
-	ctx := &sshContext{Context: innerCtx, Mutex: &sync.Mutex{}, values: make(map[interface{}]interface{})}
+	ctx := &sshContext{
+		Context: innerCtx,
+		Mutex:   &sync.Mutex{},
+		values:  make(map[interface{}]interface{}),
+	}
 	ctx.SetValue(ContextKeyServer, srv)
 	perms := &Permissions{&gossh.Permissions{}}
 	ctx.SetValue(ContextKeyPermissions, perms)
 	return ctx, cancel
 }
 
+func resetPermissions(ctx Context) {
+	ctx.Permissions().Permissions = &gossh.Permissions{}
+}
+
 // this is separate from newContext because we will get ConnMetadata
-// at different points so it needs to be applied separately
+// at different points so it needs to be applied separately.
 func applyConnMetadata(ctx Context, conn gossh.ConnMetadata) {
+	// The username is per-authentication-attempt and can change between
+	// attempts on the same connection, so it must be refreshed every time.
+	// The remaining values are connection-scoped and set only once.
+	ctx.SetValue(ContextKeyUser, conn.User())
+
 	if ctx.Value(ContextKeySessionID) != nil {
 		return
 	}
 	ctx.SetValue(ContextKeySessionID, hex.EncodeToString(conn.SessionID()))
 	ctx.SetValue(ContextKeyClientVersion, string(conn.ClientVersion()))
 	ctx.SetValue(ContextKeyServerVersion, string(conn.ServerVersion()))
-	ctx.SetValue(ContextKeyUser, conn.User())
 	ctx.SetValue(ContextKeyLocalAddr, conn.LocalAddr())
 	ctx.SetValue(ContextKeyRemoteAddr, conn.RemoteAddr())
 }
@@ -161,7 +181,10 @@ func (ctx *sshContext) RemoteAddr() net.Addr {
 }
 
 func (ctx *sshContext) LocalAddr() net.Addr {
-	return ctx.Value(ContextKeyLocalAddr).(net.Addr)
+	if addr, ok := ctx.Value(ContextKeyLocalAddr).(net.Addr); ok {
+		return addr
+	}
+	return nil
 }
 
 func (ctx *sshContext) Permissions() *Permissions {

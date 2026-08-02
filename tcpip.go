@@ -2,7 +2,7 @@ package ssh
 
 import (
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"strconv"
 	"sync"
@@ -14,7 +14,7 @@ const (
 	forwardedTCPChannelType = "forwarded-tcpip"
 )
 
-// direct-tcpip data struct as specified in RFC4254, Section 7.2
+// direct-tcpip data struct as specified in RFC4254, Section 7.2.
 type localForwardChannelData struct {
 	DestAddr string
 	DestPort uint32
@@ -25,15 +25,15 @@ type localForwardChannelData struct {
 
 // DirectTCPIPHandler can be enabled by adding it to the server's
 // ChannelHandlers under direct-tcpip.
-func DirectTCPIPHandler(srv *Server, conn *gossh.ServerConn, newChan gossh.NewChannel, ctx Context) {
+func DirectTCPIPHandler(srv *Server, _ *gossh.ServerConn, newChan gossh.NewChannel, ctx Context) {
 	d := localForwardChannelData{}
 	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
-		newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
+		_ = newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
 		return
 	}
 
 	if srv.LocalPortForwardingCallback == nil || !srv.LocalPortForwardingCallback(ctx, d.DestAddr, d.DestPort) {
-		newChan.Reject(gossh.Prohibited, "port forwarding is disabled")
+		_ = newChan.Reject(gossh.Prohibited, "port forwarding is disabled")
 		return
 	}
 
@@ -42,26 +42,28 @@ func DirectTCPIPHandler(srv *Server, conn *gossh.ServerConn, newChan gossh.NewCh
 	var dialer net.Dialer
 	dconn, err := dialer.DialContext(ctx, "tcp", dest)
 	if err != nil {
-		newChan.Reject(gossh.ConnectionFailed, err.Error())
+		_ = newChan.Reject(gossh.ConnectionFailed, err.Error())
 		return
 	}
 
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
-		dconn.Close()
+		_ = dconn.Close()
 		return
 	}
 	go gossh.DiscardRequests(reqs)
 
 	go func() {
-		defer ch.Close()
-		defer dconn.Close()
-		io.Copy(ch, dconn)
+		defer recoverAndLog("panic proxying forwarded connection", nil, nil)
+		defer func() { _ = ch.Close() }()
+		defer func() { _ = dconn.Close() }()
+		_, _ = io.Copy(ch, dconn)
 	}()
 	go func() {
-		defer ch.Close()
-		defer dconn.Close()
-		io.Copy(dconn, ch)
+		defer recoverAndLog("panic proxying forwarded connection", nil, nil)
+		defer func() { _ = ch.Close() }()
+		defer func() { _ = dconn.Close() }()
+		_, _ = io.Copy(dconn, ch)
 	}()
 }
 
@@ -94,6 +96,8 @@ type ForwardedTCPHandler struct {
 	sync.Mutex
 }
 
+// HandleSSHRequest handles the tcpip-forward and cancel-tcpip-forward
+// global requests.
 func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *gossh.Request) (bool, []byte) {
 	h.Lock()
 	if h.forwards == nil {
@@ -105,7 +109,7 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 	case "tcpip-forward":
 		var reqPayload remoteForwardRequest
 		if err := gossh.Unmarshal(req.Payload, &reqPayload); err != nil {
-			// TODO: log parse failure
+			slog.Warn("ssh: failed to parse tcpip-forward request", "err", err)
 			return false, []byte{}
 		}
 		if srv.ReversePortForwardingCallback == nil || !srv.ReversePortForwardingCallback(ctx, reqPayload.BindAddr, reqPayload.BindPort) {
@@ -114,11 +118,14 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 		addr := net.JoinHostPort(reqPayload.BindAddr, strconv.Itoa(int(reqPayload.BindPort)))
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
-			// TODO: log listen failure
+			slog.Warn("ssh: reverse port forward listen failed", "addr", addr, "err", err)
 			return false, []byte{}
 		}
 		_, destPortStr, _ := net.SplitHostPort(ln.Addr().String())
 		destPort, _ := strconv.Atoi(destPortStr)
+		// Use the actual bound port as the map key so that port 0
+		// requests don't collide.
+		addr = net.JoinHostPort(reqPayload.BindAddr, destPortStr)
 		h.Lock()
 		h.forwards[addr] = ln
 		h.Unlock()
@@ -128,14 +135,14 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 			ln, ok := h.forwards[addr]
 			h.Unlock()
 			if ok {
-				ln.Close()
+				_ = ln.Close()
 			}
 		}()
 		go func() {
 			for {
 				c, err := ln.Accept()
 				if err != nil {
-					// TODO: log accept failure
+					slog.Debug("ssh: reverse port forward accept failed", "addr", addr, "err", err)
 					break
 				}
 				originAddr, orignPortStr, _ := net.SplitHostPort(c.RemoteAddr().String())
@@ -147,23 +154,27 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 					OriginPort: uint32(originPort),
 				})
 				go func() {
+					defer recoverAndLog("panic opening forwarded channel", nil, func() {
+						_ = c.Close()
+					})
 					ch, reqs, err := conn.OpenChannel(forwardedTCPChannelType, payload)
 					if err != nil {
-						// TODO: log failure to open channel
-						log.Println(err)
-						c.Close()
+						slog.Warn("ssh: failed to open forwarded channel", "err", err)
+						_ = c.Close()
 						return
 					}
 					go gossh.DiscardRequests(reqs)
 					go func() {
-						defer ch.Close()
-						defer c.Close()
-						io.Copy(ch, c)
+						defer recoverAndLog("panic proxying forwarded channel", nil, nil)
+						defer func() { _ = ch.Close() }()
+						defer func() { _ = c.Close() }()
+						_, _ = io.Copy(ch, c)
 					}()
 					go func() {
-						defer ch.Close()
-						defer c.Close()
-						io.Copy(c, ch)
+						defer recoverAndLog("panic proxying forwarded channel", nil, nil)
+						defer func() { _ = ch.Close() }()
+						defer func() { _ = c.Close() }()
+						_, _ = io.Copy(c, ch)
 					}()
 				}()
 			}
@@ -176,7 +187,7 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 	case "cancel-tcpip-forward":
 		var reqPayload remoteForwardCancelRequest
 		if err := gossh.Unmarshal(req.Payload, &reqPayload); err != nil {
-			// TODO: log parse failure
+			slog.Warn("ssh: failed to parse cancel-tcpip-forward request", "err", err)
 			return false, []byte{}
 		}
 		addr := net.JoinHostPort(reqPayload.BindAddr, strconv.Itoa(int(reqPayload.BindPort)))
@@ -184,7 +195,7 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 		ln, ok := h.forwards[addr]
 		h.Unlock()
 		if ok {
-			ln.Close()
+			_ = ln.Close()
 		}
 		return true, nil
 	default:

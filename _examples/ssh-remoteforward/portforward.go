@@ -4,11 +4,10 @@ import (
 	"io"
 	"log"
 
-	"github.com/gliderlabs/ssh"
+	"charm.land/ssh"
 )
 
 func main() {
-
 	log.Println("starting ssh server on port 2222...")
 
 	forwardHandler := &ssh.ForwardedTCPHandler{}
@@ -18,7 +17,7 @@ func main() {
 			log.Println("Accepted forward", dhost, dport)
 			return true
 		}),
-		Addr: ":2222",
+		Addr: "localhost:2222",
 		Handler: ssh.Handler(func(s ssh.Session) {
 			io.WriteString(s, "Remote forwarding available...\n")
 			select {}

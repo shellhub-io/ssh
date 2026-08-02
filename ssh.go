@@ -7,6 +7,7 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 )
 
+// Signal represents a POSIX signal as specified in RFC 4254 Section 6.10.
 type Signal string
 
 // POSIX signals as listed in RFC 4254 Section 6.10.
@@ -47,8 +48,11 @@ type PasswordHandler func(ctx Context, password string) bool
 // KeyboardInteractiveHandler is a callback for performing keyboard-interactive authentication.
 type KeyboardInteractiveHandler func(ctx Context, challenger gossh.KeyboardInteractiveChallenge) bool
 
-// PtyCallback is a hook for allowing PTY sessions.
-type PtyCallback func(ctx Context, pty Pty) bool
+// PtyHandler is a callback for handling PTY allocation requests.
+type PtyHandler func(ctx Context, s Session, pty Pty) (func() error, error)
+
+// PtyCallback is a hook for handling PTY allocation requests.
+type PtyCallback func(ctx Context, req Pty) bool
 
 // SessionRequestCallback is a callback for allowing or denying SSH sessions.
 type SessionRequestCallback func(sess Session, requestType string) bool
@@ -58,30 +62,63 @@ type SessionRequestCallback func(sess Session, requestType string) bool
 // the net.Conn that will be used as the underlying connection.
 type ConnCallback func(ctx Context, conn net.Conn) net.Conn
 
-// LocalPortForwardingCallback is a hook for allowing port forwarding
+// LocalPortForwardingCallback is a hook for allowing port forwarding.
 type LocalPortForwardingCallback func(ctx Context, destinationHost string, destinationPort uint32) bool
 
-// ReversePortForwardingCallback is a hook for allowing reverse port forwarding
+// ReversePortForwardingCallback is a hook for allowing reverse port forwarding.
 type ReversePortForwardingCallback func(ctx Context, bindHost string, bindPort uint32) bool
 
-// ServerConfigCallback is a hook for creating custom default server configs
+// ServerConfigCallback is a hook for creating custom default server configs.
 type ServerConfigCallback func(ctx Context) *gossh.ServerConfig
 
 // ConnectionFailedCallback is a hook for reporting failed connections
-// Please note: the net.Conn is likely to be closed at this point
+// Please note: the net.Conn is likely to be closed at this point.
 type ConnectionFailedCallback func(conn net.Conn, err error)
 
+// ConnectionCloseCallback is a hook for reporting closed connections.
+type ConnectionCloseCallback func(conn net.Conn)
+
 // Window represents the size of a PTY window.
+//
+// From https://datatracker.ietf.org/doc/html/rfc4254#section-6.2
+//
+// Zero dimension parameters MUST be ignored. The character/row dimensions
+// override the pixel dimensions (when nonzero).  Pixel dimensions refer
+// to the drawable area of the window.
 type Window struct {
-	Width  int
+	// Width is the number of columns.
+	// It overrides WidthPixels.
+	Width int
+	// Height is the number of rows.
+	// It overrides HeightPixels.
 	Height int
+
+	// WidthPixels is the drawable width of the window, in pixels.
+	WidthPixels int
+	// HeightPixels is the drawable height of the window, in pixels.
+	HeightPixels int
 }
 
 // Pty represents a PTY request and configuration.
 type Pty struct {
-	Term   string
+	impl
+
+	// Term is the TERM environment variable value.
+	Term string
+
+	// Window is the Window sent as part of the pty-req.
 	Window Window
-	// HELP WANTED: terminal modes!
+
+	// Modes represent a mapping of Terminal Mode opcode to value as it was
+	// requested by the client as part of the pty-req. These are outlined as
+	// part of https://datatracker.ietf.org/doc/html/rfc4254#section-8.
+	//
+	// The opcodes are defined as constants in golang.org/x/crypto/ssh (VINTR,VQUIT,etc.).
+	// Boolean opcodes have values 0 or 1.
+	//
+	// Note: golang.org/x/crypto/ssh currently (2022-03-12) doesn't have a
+	// definition for opcode 42 "iutf8" which was introduced in https://datatracker.ietf.org/doc/html/rfc8160.
+	Modes gossh.TerminalModes
 }
 
 // Serve accepts incoming SSH connections on the listener l, creating a new

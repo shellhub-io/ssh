@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 
 	gossh "golang.org/x/crypto/ssh"
@@ -107,6 +110,30 @@ func TestStderr(t *testing.T) {
 	}
 }
 
+func TestPtyStderr(t *testing.T) {
+	t.Parallel()
+	testBytes := []byte("Hello world\n\r\n")
+	expectBytes := []byte("Hello world\r\n\r\n")
+	session, _, cleanup := newTestSession(t, &Server{
+		Handler: func(s Session) {
+			s.Stderr().Write(testBytes)
+		},
+	}, nil)
+	err := session.RequestPty("xterm", 80, 40, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	var stderr bytes.Buffer
+	session.Stderr = &stderr
+	if err := session.Run(""); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stderr.Bytes(), expectBytes) {
+		t.Fatalf("stderr = %#v; want %#v", stderr.Bytes(), expectBytes)
+	}
+}
+
 func TestStdin(t *testing.T) {
 	t.Parallel()
 	testBytes := []byte("Hello world\n")
@@ -202,6 +229,7 @@ func TestPty(t *testing.T) {
 	done := make(chan bool)
 	session, _, cleanup := newTestSession(t, &Server{
 		Handler: func(s Session) {
+			defer func() { close(done) }()
 			ptyReq, _, isPty := s.Pty()
 			if !isPty {
 				t.Fatalf("expected pty but none requested")
@@ -215,7 +243,6 @@ func TestPty(t *testing.T) {
 			if ptyReq.Window.Height != winHeight {
 				t.Fatalf("expected window height %#v but got %#v", winHeight, ptyReq.Window.Height)
 			}
-			close(done)
 		},
 	}, nil)
 	defer cleanup()
@@ -228,15 +255,52 @@ func TestPty(t *testing.T) {
 	<-done
 }
 
+func TestPtyWriter(t *testing.T) {
+	t.Parallel()
+	term := "xterm"
+	winWidth := 40
+	winHeight := 80
+	session, _, cleanup := newTestSession(t, &Server{
+		Handler: func(s Session) {
+			_, _ = fmt.Fprintln(s, "foo\nbar")
+			_, _ = fmt.Fprintln(s.Stderr(), "many\nerrors")
+			_ = s.Exit(0)
+		},
+	}, nil)
+	defer cleanup()
+	if err := session.RequestPty(term, winHeight, winWidth, gossh.TerminalModes{}); err != nil {
+		t.Fatalf("expected nil but got %v", err)
+	}
+	bts, err := session.CombinedOutput("")
+	if err != nil {
+		t.Fatalf("expected nil but got %v", err)
+	}
+
+	// CombinedOutput copies stdout and stderr in separate goroutines, so the
+	// order between the two streams is not guaranteed. Assert on the set of
+	// lines and on the \n -> \r\n conversion instead of the exact sequence.
+	lines := strings.Split(string(bts), "\r\n")
+	if lines[len(lines)-1] != "" {
+		t.Fatalf("expected output to end with %q, got %q", "\r\n", string(bts))
+	}
+	lines = lines[:len(lines)-1]
+	sort.Strings(lines)
+	expected := []string{"bar", "errors", "foo", "many"}
+	if !reflect.DeepEqual(expected, lines) {
+		t.Fatalf("expected output lines to be %q, got %q", expected, lines)
+	}
+}
+
 func TestPtyResize(t *testing.T) {
 	t.Parallel()
-	winch0 := Window{40, 80}
-	winch1 := Window{80, 160}
-	winch2 := Window{20, 40}
+	winch0 := Window{40, 80, 320, 640}
+	winch1 := Window{80, 160, 640, 1280}
+	winch2 := Window{20, 40, 160, 320}
 	winches := make(chan Window)
 	done := make(chan bool)
 	session, _, cleanup := newTestSession(t, &Server{
 		Handler: func(s Session) {
+			defer func() { close(done) }()
 			ptyReq, winCh, isPty := s.Pty()
 			if !isPty {
 				t.Fatalf("expected pty but none requested")
@@ -247,7 +311,6 @@ func TestPtyResize(t *testing.T) {
 			for win := range winCh {
 				winches <- win
 			}
-			close(done)
 		},
 	}, nil)
 	defer cleanup()
@@ -263,20 +326,16 @@ func TestPtyResize(t *testing.T) {
 		t.Fatalf("expected window %#v but got %#v", winch0, gotWinch)
 	}
 	// winch1
-	winchMsg := struct{ w, h uint32 }{uint32(winch1.Width), uint32(winch1.Height)}
-	ok, err := session.SendRequest("window-change", true, gossh.Marshal(&winchMsg))
-	if err == nil && !ok {
-		t.Fatalf("unexpected error or bad reply on send request")
+	if err := session.WindowChange(winch1.Height, winch1.Width); err != nil {
+		t.Fatalf("expected nil but got %v", err)
 	}
 	gotWinch = <-winches
 	if gotWinch != winch1 {
 		t.Fatalf("expected window %#v but got %#v", winch1, gotWinch)
 	}
 	// winch2
-	winchMsg = struct{ w, h uint32 }{uint32(winch2.Width), uint32(winch2.Height)}
-	ok, err = session.SendRequest("window-change", true, gossh.Marshal(&winchMsg))
-	if err == nil && !ok {
-		t.Fatalf("unexpected error or bad reply on send request")
+	if err := session.WindowChange(winch2.Height, winch2.Width); err != nil {
+		t.Fatalf("expected nil but got %v", err)
 	}
 	gotWinch = <-winches
 	if gotWinch != winch2 {

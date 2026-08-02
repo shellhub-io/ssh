@@ -19,7 +19,7 @@ const (
 )
 
 // contextKeyAgentRequest is an internal context key for storing if the
-// client requested agent forwarding
+// client requested agent forwarding.
 var contextKeyAgentRequest = &contextKey{"auth-agent-req"}
 
 // SetAgentRequested sets up the session context so that AgentRequested
@@ -58,24 +58,31 @@ func ForwardAgentConnections(l net.Listener, s Session) {
 			return
 		}
 		go func(conn net.Conn) {
-			defer conn.Close()
+			defer recoverAndLog("panic forwarding agent connection", nil, nil)
+			defer func() { _ = conn.Close() }()
 			channel, reqs, err := sshConn.OpenChannel(agentChannelType, nil)
 			if err != nil {
 				return
 			}
-			defer channel.Close()
+			defer func() { _ = channel.Close() }()
 			go gossh.DiscardRequests(reqs)
 			var wg sync.WaitGroup
 			wg.Add(2)
 			go func() {
-				io.Copy(conn, channel)
-				conn.(*net.UnixConn).CloseWrite()
-				wg.Done()
+				// Done is deferred ahead of the recover so that it runs even
+				// if the copy panics. Otherwise the recover would turn a crash
+				// into a permanently blocked Wait below, leaking this
+				// goroutine along with the socket and the channel.
+				defer wg.Done()
+				defer recoverAndLog("panic proxying agent connection", nil, nil)
+				_, _ = io.Copy(conn, channel)
+				_ = conn.(*net.UnixConn).CloseWrite()
 			}()
 			go func() {
-				io.Copy(channel, conn)
-				channel.CloseWrite()
-				wg.Done()
+				defer wg.Done()
+				defer recoverAndLog("panic proxying agent connection", nil, nil)
+				_, _ = io.Copy(channel, conn)
+				_ = channel.CloseWrite()
 			}()
 			wg.Wait()
 		}(conn)

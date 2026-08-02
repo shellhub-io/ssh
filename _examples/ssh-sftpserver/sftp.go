@@ -5,7 +5,7 @@ import (
 	"io"
 	"log"
 
-	"github.com/gliderlabs/ssh"
+	"charm.land/ssh"
 	"github.com/pkg/sftp"
 )
 
@@ -23,10 +23,10 @@ func SftpHandler(sess ssh.Session) {
 		log.Printf("sftp server init error: %s\n", err)
 		return
 	}
-	if err := server.Serve(); err == io.EOF {
+	if err := server.Serve(); err == io.EOF || err == nil {
 		server.Close()
 		fmt.Println("sftp client exited session.")
-	} else if err != nil {
+	} else {
 		fmt.Println("sftp server completed with error:", err)
 	}
 }

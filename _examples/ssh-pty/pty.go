@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/gliderlabs/ssh"
+	"charm.land/ssh"
 	"github.com/creack/pty"
 )
 
@@ -45,5 +45,5 @@ func main() {
 	})
 
 	log.Println("starting ssh server on port 2222...")
-	log.Fatal(ssh.ListenAndServe(":2222", nil))
+	log.Fatal(ssh.ListenAndServe("localhost:2222", nil))
 }

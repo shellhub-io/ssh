@@ -49,6 +49,31 @@ func TestSetValue(t *testing.T) {
 	}
 }
 
+func TestRaceRWIssue160(t *testing.T) {
+	value := "foo"
+	key := "bar"
+	session, _, cleanup := newTestSessionWithOptions(t, &Server{
+		Handler: func(s Session) {
+			t.Run("test done", func(t *testing.T) {
+				t.Parallel()
+				go func() {
+					s.Context().SetValue(key, value)
+				}()
+				go func() {
+					select {
+					case <-s.Context().Done():
+					}
+				}()
+			})
+		},
+	}, nil)
+	defer cleanup()
+	if err := session.Run(""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Taken from https://github.com/gliderlabs/ssh/pull/211/commits/02f9d573009f8c13755b6b90fa14a4f549b17b22
 func TestSetValueConcurrency(t *testing.T) {
 	ctx, cancel := newContext(nil)
 	defer cancel()
@@ -60,7 +85,7 @@ func TestSetValueConcurrency(t *testing.T) {
 			_ = ctx.Value("foo")
 			select {
 			case <-ctx.Done():
-				break
+				return
 			default:
 			}
 		}

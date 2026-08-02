@@ -1,9 +1,10 @@
 package ssh
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"sync"
 
@@ -18,7 +19,7 @@ import (
 // When Command() returns an empty slice, the user requested a shell. Otherwise
 // the user is performing an exec with those command arguments.
 //
-// TODO: Signals
+// TODO: Signals.
 type Session interface {
 	gossh.Channel
 
@@ -65,6 +66,9 @@ type Session interface {
 	// setup in the auth handlers via the Context.
 	Permissions() Permissions
 
+	// EmulatedPty returns true if the session is emulating a PTY using PtyWriter.
+	EmulatedPty() bool
+
 	// Pty returns PTY information, a channel of window size changes, and a boolean
 	// of whether or not a PTY was accepted for this session.
 	Pty() (Pty, <-chan Window, bool)
@@ -85,13 +89,14 @@ type Session interface {
 }
 
 // maxSigBufSize is how many signals will be buffered
-// when there is no signal channel specified
+// when there is no signal channel specified.
 const maxSigBufSize = 128
 
+// DefaultSessionHandler is the default handler for the "session" channel type.
 func DefaultSessionHandler(srv *Server, conn *gossh.ServerConn, newChan gossh.NewChannel, ctx Context) {
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
-		// TODO: trigger event callback
+		slog.Warn("ssh: failed to accept session channel", "err", err)
 		return
 	}
 	sess := &session{
@@ -99,10 +104,12 @@ func DefaultSessionHandler(srv *Server, conn *gossh.ServerConn, newChan gossh.Ne
 		conn:              conn,
 		handler:           srv.Handler,
 		ptyCb:             srv.PtyCallback,
+		ptyHandler:        srv.PtyHandler,
 		sessReqCb:         srv.SessionRequestCallback,
 		subsystemHandlers: srv.SubsystemHandlers,
 		ctx:               ctx,
 	}
+	ctx.SetValue(ContextKeySession, sess)
 	sess.handleRequests(reqs)
 }
 
@@ -118,6 +125,7 @@ type session struct {
 	winch             chan Window
 	env               []string
 	ptyCb             PtyCallback
+	ptyHandler        PtyHandler
 	sessReqCb         SessionRequestCallback
 	rawCmd            string
 	subsystem         string
@@ -127,18 +135,16 @@ type session struct {
 	breakCh           chan<- bool
 }
 
-func (sess *session) Write(p []byte) (n int, err error) {
-	if sess.pty != nil {
-		m := len(p)
-		// normalize \n to \r\n when pty is accepted.
-		// this is a hardcoded shortcut since we don't support terminal modes.
-		p = bytes.Replace(p, []byte{'\n'}, []byte{'\r', '\n'}, -1)
-		p = bytes.Replace(p, []byte{'\r', '\r', '\n'}, []byte{'\r', '\n'}, -1)
-		n, err = sess.Channel.Write(p)
-		if n > m {
-			n = m
-		}
-		return
+func (sess *session) Stderr() io.ReadWriter {
+	if sess.pty != nil && sess.EmulatedPty() {
+		return NewPtyReadWriter(sess.Channel.Stderr())
+	}
+	return sess.Channel.Stderr()
+}
+
+func (sess *session) Write(p []byte) (int, error) {
+	if sess.pty != nil && sess.EmulatedPty() {
+		return NewPtyWriter(sess.Channel).Write(p)
 	}
 	return sess.Channel.Write(p)
 }
@@ -207,10 +213,14 @@ func (sess *session) Subsystem() string {
 	return sess.subsystem
 }
 
+func (sess *session) EmulatedPty() bool {
+	return sess.ctx.Value(contextKeyEmulatePty) == true
+}
+
 func (sess *session) Pty() (Pty, <-chan Window, bool) {
 	sess.Lock()
 	defer sess.Unlock()
-	if sess.pty != nil {
+	if sess.pty != nil && (sess.EmulatedPty() || !sess.pty.IsZero()) {
 		return *sess.pty, sess.winch, true
 	}
 	return Pty{}, sess.winch, false
@@ -240,44 +250,67 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 		switch req.Type {
 		case "shell", "exec":
 			if sess.handled {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 
-			var payload = struct{ Value string }{}
-			gossh.Unmarshal(req.Payload, &payload)
+			payload := struct{ Value string }{}
+			_ = gossh.Unmarshal(req.Payload, &payload)
 			sess.rawCmd = payload.Value
 
 			// If there's a session policy callback, we need to confirm before
 			// accepting the session.
 			if sess.sessReqCb != nil && !sess.sessReqCb(sess, req.Type) {
 				sess.rawCmd = ""
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
+				continue
+			}
+
+			if sess.handler == nil {
+				_ = req.Reply(false, nil)
 				continue
 			}
 
 			sess.handled = true
-			req.Reply(true, nil)
+			_ = req.Reply(true, nil)
 
 			go func() {
+				// Closed from a defer so the pty is still released when the
+				// handler panics, rather than trading a crash for a leak.
+				if sess.pty != nil && !sess.pty.IsZero() {
+					defer func() { _ = sess.pty.Close() }()
+				}
+				defer recoverAndLog("panic in session handler", nil, func() {
+					_ = sess.Exit(1)
+				})
+				if sess.pty != nil && !sess.pty.IsZero() {
+					go func() {
+						defer recoverAndLog("panic copying to pty", nil, nil)
+						_, _ = io.Copy(sess.pty, sess)
+					}()
+					go func() {
+						defer recoverAndLog("panic copying from pty", nil, nil)
+						_, _ = io.Copy(sess, sess.pty)
+					}()
+				}
 				sess.handler(sess)
-				sess.Exit(0)
+				_ = sess.Exit(0)
 			}()
 		case "subsystem":
 			if sess.handled {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 
-			var payload = struct{ Value string }{}
-			gossh.Unmarshal(req.Payload, &payload)
+			payload := struct{ Value string }{}
+			_ = gossh.Unmarshal(req.Payload, &payload)
 			sess.subsystem = payload.Value
 
 			// If there's a session policy callback, we need to confirm before
 			// accepting the session.
 			if sess.sessReqCb != nil && !sess.sessReqCb(sess, req.Type) {
 				sess.rawCmd = ""
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 
@@ -286,29 +319,32 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 				handler = sess.subsystemHandlers["default"]
 			}
 			if handler == nil {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 
 			sess.handled = true
-			req.Reply(true, nil)
+			_ = req.Reply(true, nil)
 
 			go func() {
+				defer recoverAndLog("panic in subsystem handler", nil, func() {
+					_ = sess.Exit(1)
+				})
 				handler(sess)
-				sess.Exit(0)
+				_ = sess.Exit(0)
 			}()
 		case "env":
 			if sess.handled {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 			var kv struct{ Key, Value string }
-			gossh.Unmarshal(req.Payload, &kv)
+			_ = gossh.Unmarshal(req.Payload, &kv)
 			sess.env = append(sess.env, fmt.Sprintf("%s=%s", kv.Key, kv.Value))
-			req.Reply(true, nil)
+			_ = req.Reply(true, nil)
 		case "signal":
 			var payload struct{ Signal string }
-			gossh.Unmarshal(req.Payload, &payload)
+			_ = gossh.Unmarshal(req.Payload, &payload)
 			sess.Lock()
 			if sess.sigCh != nil {
 				sess.sigCh <- Signal(payload.Signal)
@@ -320,48 +356,86 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 			sess.Unlock()
 		case "pty-req":
 			if sess.handled || sess.pty != nil {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 			ptyReq, ok := parsePtyRequest(req.Payload)
 			if !ok {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
 			if sess.ptyCb != nil {
 				ok := sess.ptyCb(sess.ctx, ptyReq)
 				if !ok {
-					req.Reply(false, nil)
+					_ = req.Reply(false, nil)
 					continue
 				}
 			}
+
+			// The request loop writes pty and winch while the user's handler
+			// reads them through Pty() on its own goroutine.
 			sess.Lock()
 			sess.pty = &ptyReq
 			sess.winch = make(chan Window, 1)
 			sess.Unlock()
 			sess.winch <- ptyReq.Window
-			defer func() {
+
+			if sess.ptyHandler != nil {
+				closer, err := sess.ptyHandler(sess.ctx, sess, ptyReq)
+				if err != nil {
+					// Undo the pty-req setup, or window-change keeps sending on
+					// a winch nobody drains and wedges the loop.
+					sess.Lock()
+					sess.pty = nil
+					sess.Unlock()
+					close(sess.winch)
+					_ = req.Reply(false, nil)
+					continue
+				}
+
+				defer func() { _ = closer() }() //nolint:staticcheck // intentional: runs when req channel closes
+
+				if !sess.EmulatedPty() && !sess.pty.IsZero() {
+					go func() {
+						defer recoverAndLog("panic resizing pty", nil, nil)
+						for win := range sess.winch {
+							if err := resizePty(sess, win); err != nil {
+								// TODO: handle error
+								continue
+							}
+						}
+					}()
+				}
+			}
+
+			defer func() { //nolint:staticcheck // intentional: runs when req channel closes
 				// when reqs is closed
 				close(sess.winch)
 			}()
-			req.Reply(ok, nil)
+			_ = req.Reply(ok, nil)
 		case "window-change":
 			if sess.pty == nil {
-				req.Reply(false, nil)
+				_ = req.Reply(false, nil)
 				continue
 			}
-			win, ok := parseWinchRequest(req.Payload)
+			win, _, ok := parseWindow(req.Payload)
 			if ok {
 				sess.Lock()
 				sess.pty.Window = win
 				sess.Unlock()
+				// A queued size nobody took is stale, and blocking on it wedges
+				// the loop. This is the only sender, so the send cannot block.
+				select {
+				case <-sess.winch:
+				default:
+				}
 				sess.winch <- win
 			}
-			req.Reply(ok, nil)
+			_ = req.Reply(ok, nil)
 		case agentRequestType:
 			// TODO: option/callback to allow agent forwarding
 			SetAgentRequested(sess.ctx)
-			req.Reply(true, nil)
+			_ = req.Reply(true, nil)
 		case "break":
 			ok := false
 			sess.Lock()
@@ -369,11 +443,35 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 				sess.breakCh <- true
 				ok = true
 			}
-			req.Reply(ok, nil)
+			_ = req.Reply(ok, nil)
 			sess.Unlock()
 		default:
-			// TODO: debug log
-			req.Reply(false, nil)
+			slog.Debug("ssh: unknown session request", "type", req.Type)
+			_ = req.Reply(false, nil)
 		}
 	}
+}
+
+func (sess *session) ptyAllocate(term string, win Window, modes gossh.TerminalModes) (func() error, error) {
+	p, err := newPty(sess.ctx, term, win, modes)
+	if err != nil {
+		return nil, err
+	}
+
+	sess.pty = &Pty{
+		Term:   term,
+		Window: win,
+		Modes:  modes,
+		impl:   p,
+	}
+
+	return p.Close, nil
+}
+
+func resizePty(sess *session, win Window) error {
+	if sess.pty == nil {
+		return nil
+	}
+
+	return sess.pty.Resize(win.Width, win.Height)
 }
