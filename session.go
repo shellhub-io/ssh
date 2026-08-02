@@ -393,7 +393,17 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 					continue
 				}
 
-				defer func() { _ = closer() }() //nolint:staticcheck // intentional: runs when req channel closes
+				defer func() { //nolint:staticcheck // intentional: runs when req channel closes
+					// Once shell or exec is accepted the handler goroutine owns
+					// the pty and releases it on its own. Closing here too can
+					// pull the slave out from under a command that is still
+					// starting, which the race detector sees against cmd.Start
+					// reading its descriptor. A pty-req that never became a
+					// shell has no other owner, so it still needs this.
+					if !sess.handled {
+						_ = closer()
+					}
+				}()
 
 				if !sess.EmulatedPty() && !sess.pty.IsZero() {
 					go func() {
