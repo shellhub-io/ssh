@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/anmitsu/go-shlex"
 	gossh "golang.org/x/crypto/ssh"
@@ -36,7 +37,9 @@ type Session interface {
 	// user for this session, in the form "key=value".
 	Environ() []string
 
-	// Exit sends an exit status and then closes the session.
+	// Exit sends an exit status. It leaves the channel open so any output the
+	// command has not delivered yet still gets through; the session is closed
+	// once its handler returns.
 	Exit(code int) error
 
 	// Command returns a shell parsed slice of arguments that were provided by the
@@ -181,7 +184,12 @@ func (sess *session) Exit(code int) error {
 	if err != nil {
 		return err
 	}
-	return sess.Close()
+
+	// Closing here would cut off output the command wrote just before exiting
+	// and that has not been copied out yet. Whoever ends the session closes it.
+	//
+	// https://datatracker.ietf.org/doc/html/rfc4254#section-6.10
+	return nil
 }
 
 func (sess *session) User() string {
@@ -255,6 +263,52 @@ func (sess *session) releaseUnhandledPty(closer func() error) {
 	}
 }
 
+// ptyDrainTimeout bounds the wait for a pty's remaining output. A process the
+// command left running behind it holds the terminal open, and the copy would
+// otherwise have nothing to stop on.
+const ptyDrainTimeout = 5 * time.Second
+
+// drainPty releases the server's slave descriptor and waits for what the pty
+// still holds to reach the channel.
+//
+// Dropping the slave is what ends the copy: while the server keeps it, reading
+// the master never reaches the end of the stream, not even once the command has
+// exited. Without the wait the close that follows discards whatever has not
+// been copied out, which is most of a burst written just before exiting.
+func (sess *session) drainPty(drained <-chan struct{}) {
+	if sess.pty == nil || sess.pty.IsZero() {
+		return
+	}
+
+	_ = sess.pty.closeSlave()
+
+	if drained == nil {
+		return
+	}
+
+	select {
+	case <-drained:
+	case <-time.After(ptyDrainTimeout):
+		slog.Warn("ssh: gave up waiting for the pty to drain", "timeout", ptyDrainTimeout)
+	}
+}
+
+// finish ends a session a handler took over.
+//
+// The order is the point, and it is only possible because Exit stopped closing
+// the channel. Exit is also a no-op once the handler reported a status of its
+// own, so a handler that exits with a code keeps it.
+func (sess *session) finish(drained <-chan struct{}) {
+	sess.drainPty(drained)
+	_ = sess.Exit(0)
+	_ = sess.CloseWrite()
+	_ = sess.Close()
+
+	if sess.pty != nil && !sess.pty.IsZero() {
+		_ = sess.pty.Close()
+	}
+}
+
 func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 	for req := range reqs {
 		switch req.Type {
@@ -285,26 +339,37 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 			_ = req.Reply(true, nil)
 
 			go func() {
-				// Closed from a defer so the pty is still released when the
-				// handler panics, rather than trading a crash for a leak.
-				if sess.pty != nil && !sess.pty.IsZero() {
-					defer func() { _ = sess.pty.Close() }()
-				}
+				var drained chan struct{}
+
+				// Registered before the recover so it runs after it: a handler
+				// that panics still has to leave the channel closed and the pty
+				// released, or the client waits on a session nobody will answer.
+				defer func() { sess.finish(drained) }()
 				defer recoverAndLog("panic in session handler", nil, func() {
 					_ = sess.Exit(1)
 				})
+
 				if sess.pty != nil && !sess.pty.IsZero() {
+					drained = make(chan struct{})
+
 					go func() {
 						defer recoverAndLog("panic copying to pty", nil, nil)
 						_, _ = io.Copy(sess.pty, sess)
 					}()
 					go func() {
+						defer close(drained)
 						defer recoverAndLog("panic copying from pty", nil, nil)
-						_, _ = io.Copy(sess, sess.pty)
+
+						// A write that fails here is output the client never
+						// saw, so it is worth a line even though nothing can
+						// act on it.
+						if _, err := io.Copy(sess, sess.pty); err != nil {
+							slog.Warn("ssh: pty output did not reach the client", "err", err)
+						}
 					}()
 				}
+
 				sess.handler(sess)
-				_ = sess.Exit(0)
 			}()
 		case "subsystem":
 			if sess.handled {
@@ -337,11 +402,15 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 			_ = req.Reply(true, nil)
 
 			go func() {
+				// A subsystem can be preceded by a pty-req, and accepting the
+				// request makes this goroutine its owner: releaseUnhandledPty
+				// steps aside for exactly that reason, so without the release in
+				// finish the pair survives the session and the pts stays taken.
+				defer func() { sess.finish(nil) }()
 				defer recoverAndLog("panic in subsystem handler", nil, func() {
 					_ = sess.Exit(1)
 				})
 				handler(sess)
-				_ = sess.Exit(0)
 			}()
 		case "env":
 			if sess.handled {

@@ -4,6 +4,7 @@
 package ssh
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"syscall"
@@ -18,8 +19,12 @@ type impl struct {
 	// Master is the master PTY file descriptor.
 	Master *os.File
 
-	// Slave is the slave PTY file descriptor.
+	// Slave is the slave PTY file descriptor. It is dropped once a command
+	// owns the terminal, so it is nil for most of a session's life.
 	Slave *os.File
+
+	// name is the slave's path, kept because Name outlives the descriptor.
+	name string
 }
 
 func (i *impl) IsZero() bool {
@@ -29,11 +34,11 @@ func (i *impl) IsZero() bool {
 // Name returns the name of the slave PTY, or the empty string when nothing was
 // allocated. Pty() reports true while emulating, so callers reach these
 // accessors on a Pty that has no files behind it.
+//
+// The name is answered from a copy taken at allocation: utmp bookkeeping asks
+// for it after the session is over, by which point the descriptor is gone.
 func (i *impl) Name() string {
-	if i.Slave == nil {
-		return ""
-	}
-	return i.Slave.Name()
+	return i.name
 }
 
 // Read implements ptyInterface.
@@ -52,14 +57,35 @@ func (i *impl) Write(p []byte) (n int, err error) {
 	return i.Master.Write(p)
 }
 
-func (i *impl) Close() error {
-	if i.Master == nil && i.Slave == nil {
+// closeSlave drops the server's own reference to the slave.
+//
+// Until it is gone the server itself counts as a terminal user, so reading the
+// master never reaches the end of the stream even after the command exits, and
+// anything waiting for that end waits forever.
+func (i *impl) closeSlave() error {
+	if i.Slave == nil {
 		return nil
 	}
-	if err := i.Master.Close(); err != nil {
-		return err
+
+	err := i.Slave.Close()
+	i.Slave = nil
+
+	return err
+}
+
+func (i *impl) Close() error {
+	var errs []error
+
+	if i.Master != nil {
+		errs = append(errs, i.Master.Close())
 	}
-	return i.Slave.Close()
+
+	// Joined rather than returned early: closing the slave is what lets a read
+	// parked on the master fail, so a master that refuses to close must not
+	// cost us the close that unblocks everything else.
+	errs = append(errs, i.closeSlave())
+
+	return errors.Join(errs...)
 }
 
 func (i *impl) Resize(w int, h int) (rErr error) {
@@ -122,7 +148,7 @@ func newPty(_ Context, _ string, win Window, modes ssh.TerminalModes) (_ impl, r
 		return impl{}, err
 	}
 
-	return impl{Master: ptm, Slave: pts}, rErr
+	return impl{Master: ptm, Slave: pts, name: pts.Name()}, rErr
 }
 
 func applyTerminalModesToFd(fd uintptr, width int, height int, modes ssh.TerminalModes) error {

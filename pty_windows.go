@@ -48,6 +48,12 @@ func (i *impl) Resize(w int, h int) error {
 	return i.ConPty.Resize(w, h)
 }
 
+// closeSlave has nothing to drop: a ConPTY exposes one handle, and the console
+// host owns the end the command writes to.
+func (i *impl) closeSlave() error {
+	return nil
+}
+
 func (i *impl) Close() error {
 	if i.ConPty == nil {
 		return nil

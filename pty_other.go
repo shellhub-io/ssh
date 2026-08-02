@@ -31,6 +31,10 @@ func (i *impl) Resize(w int, h int) error {
 	return ErrUnsupported
 }
 
+func (i *impl) closeSlave() error {
+	return nil
+}
+
 func (i *impl) Close() error {
 	return nil
 }
