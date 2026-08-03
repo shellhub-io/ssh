@@ -369,6 +369,22 @@ func (sess *session) handleRequests(reqs <-chan *gossh.Request) {
 			win, _, ok := parseWindow(req.Payload)
 			if ok {
 				sess.pty.Window = win
+
+				// pty-req already filled the single slot, so a plain send blocks
+				// until something drains it, and nothing does until a handler
+				// starts. A client that resizes before asking for a shell would
+				// stall this loop for good, and the shell it is waiting to send
+				// is what would have started the drain.
+				//
+				// A queued size nobody took is stale anyway, and this is the only
+				// sender, so replacing it cannot block. RFC 4254 section 5.4 puts
+				// channel requests outside flow control, and OpenSSH answers a
+				// window-change with a non-blocking ioctl for the same reason.
+				select {
+				case <-sess.winch:
+				default:
+				}
+
 				sess.winch <- win
 			}
 			req.Reply(ok, nil)
