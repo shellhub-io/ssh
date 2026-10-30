@@ -51,20 +51,48 @@ func DirectTCPIPHandler(srv *Server, _ *gossh.ServerConn, newChan gossh.NewChann
 		_ = dconn.Close()
 		return
 	}
-	go gossh.DiscardRequests(reqs)
+	closeBoth := func() {
+		_ = ch.Close()
+		_ = dconn.Close()
+	}
+
+	uploaded := make(chan struct{})
 
 	go func() {
-		defer recoverAndLog("panic proxying forwarded connection", nil, nil)
-		defer func() { _ = ch.Close() }()
-		defer func() { _ = dconn.Close() }()
-		_, _ = io.Copy(ch, dconn)
+		gossh.DiscardRequests(reqs)
+		<-uploaded
+		closeBoth()
 	}()
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		defer recoverAndLog("panic proxying forwarded connection", nil, closeBoth)
+		if _, err := io.Copy(ch, dconn); err != nil {
+			closeBoth()
+			return
+		}
+		_ = ch.CloseWrite()
+	})
+	wg.Go(func() {
+		defer close(uploaded)
+		defer recoverAndLog("panic proxying forwarded connection", nil, closeBoth)
+		if _, err := io.Copy(dconn, ch); err != nil {
+			closeBoth()
+			return
+		}
+		_ = halfClose(dconn)
+	})
 	go func() {
-		defer recoverAndLog("panic proxying forwarded connection", nil, nil)
-		defer func() { _ = ch.Close() }()
-		defer func() { _ = dconn.Close() }()
-		_, _ = io.Copy(dconn, ch)
+		wg.Wait()
+		closeBoth()
 	}()
+}
+
+func halfClose(conn net.Conn) error {
+	if writeCloser, ok := conn.(interface{ CloseWrite() error }); ok {
+		return writeCloser.CloseWrite()
+	}
+	return conn.Close()
 }
 
 type remoteForwardRequest struct {
