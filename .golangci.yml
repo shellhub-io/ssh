@@ -30,6 +30,16 @@ linters:
       - text: '(slog|log)\.\w+'
         linters:
           - noctx
+      - text: "error returned from (external package|interface method)"
+        linters:
+          - wrapcheck
+      - text: "net.Listen must not be called"
+        linters:
+          - noctx
+      - path: server\.go
+        text: "`if e != nil` has complex nested blocks"
+        linters:
+          - nestif
     generated: lax
     presets:
       - common-false-positives

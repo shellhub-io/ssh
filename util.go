@@ -139,7 +139,7 @@ func parseWindow(s []byte) (win Window, rem []byte, ok bool) {
 
 func parseString(in []byte) (out string, rem []byte, ok bool) {
 	length, rem, ok := parseUint32(in)
-	if uint32(len(rem)) < length || !ok {
+	if !ok || uint64(len(rem)) < uint64(length) {
 		ok = false
 		return
 	}

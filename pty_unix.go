@@ -5,6 +5,7 @@ package ssh
 
 import (
 	"errors"
+	"math"
 	"os"
 	"os/exec"
 	"syscall"
@@ -99,8 +100,8 @@ func (i *impl) Resize(w int, h int) (rErr error) {
 
 	return conn.Control(func(fd uintptr) {
 		rErr = termios.SetWinsize(int(fd), &unix.Winsize{
-			Row: uint16(h),
-			Col: uint16(w),
+			Row: clampUint16(h),
+			Col: clampUint16(w),
 		})
 	})
 }
@@ -168,7 +169,9 @@ func applyTerminalModesToFd(fd uintptr, width int, height int, modes ssh.Termina
 		default:
 			cc, ok := sshToCc[op]
 			if ok {
-				ccs[cc] = uint8(value)
+				if value <= math.MaxUint8 {
+					ccs[cc] = uint8(value)
+				}
 				continue
 			}
 			i, ok := sshToIflag[op]
@@ -207,9 +210,20 @@ func applyTerminalModesToFd(fd uintptr, width int, height int, modes ssh.Termina
 		return err
 	}
 	return termios.SetWinsize(int(fd), &unix.Winsize{
-		Row: uint16(height),
-		Col: uint16(width),
+		Row: clampUint16(height),
+		Col: clampUint16(width),
 	})
+}
+
+func clampUint16(n int) uint16 {
+	if n < 0 {
+		return 0
+	}
+	if n > math.MaxUint16 {
+		return math.MaxUint16
+	}
+
+	return uint16(n)
 }
 
 var sshToCc = map[uint8]termios.CC{
