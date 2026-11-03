@@ -1,9 +1,11 @@
 package ssh
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os/exec"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -32,7 +34,7 @@ func TestPtyOutputSurvivesTheCommandExiting(t *testing.T) {
 
 			// No newlines: the terminal would turn each one into two bytes and
 			// the count would say nothing about what was lost.
-			cmd := exec.Command("/bin/sh", "-c", fmt.Sprintf("head -c %d /dev/zero | tr '\\0' x", size))
+			cmd := burstOfX(size)
 			if err := pty.Start(cmd, WithJobControl()); err != nil {
 				_ = s.Exit(1)
 
@@ -66,12 +68,12 @@ func TestPtyOutputSurvivesTheCommandExiting(t *testing.T) {
 
 	go func() {
 		out, _ := io.ReadAll(stdout)
-		read <- len(out)
+		read <- bytes.Count(out, []byte("x"))
 	}()
 
 	select {
 	case got := <-read:
-		if got != size {
+		if got < size || (runtime.GOOS != "windows" && got != size) {
 			t.Fatalf("client saw %d of %d bytes, lost %d", got, size, size-got)
 		}
 	case <-time.After(30 * time.Second):
@@ -84,6 +86,10 @@ func TestPtyOutputSurvivesTheCommandExiting(t *testing.T) {
 // give up on its own, or one backgrounded process would strand the session.
 func TestPtyDrainGivesUpOnALingeringProcess(t *testing.T) {
 	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("backgrounds the process with POSIX shell job control")
+	}
 
 	srv := &Server{
 		Handler: func(s Session) {
@@ -138,4 +144,83 @@ func TestPtyDrainGivesUpOnALingeringProcess(t *testing.T) {
 	case <-time.After(ptyDrainTimeout + 15*time.Second):
 		t.Fatal("the session outlived the drain timeout")
 	}
+}
+
+func burstOfX(size int) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", fmt.Sprintf("[Console]::Out.Write('x' * %d)", size))
+	}
+
+	return exec.Command("/bin/sh", "-c", fmt.Sprintf("head -c %d /dev/zero | tr '\\0' x", size))
+}
+
+func TestPtySessionClosesBeforeTheDrainTimeout(t *testing.T) {
+	t.Parallel()
+
+	srv := &Server{
+		Handler: func(s Session) {
+			pty, _, ok := s.Pty()
+			if !ok {
+				_ = s.Exit(1)
+
+				return
+			}
+
+			cmd := printDone()
+			if err := pty.Start(cmd); err != nil {
+				_ = s.Exit(1)
+
+				return
+			}
+
+			_ = cmd.Wait()
+		},
+	}
+	if err := AllocatePty()(srv); err != nil {
+		t.Fatal(err)
+	}
+
+	session, _, cleanup := newTestSession(t, srv, nil)
+	defer cleanup()
+
+	if err := session.RequestPty("xterm", 40, 80, nil); err != nil {
+		t.Skipf("cannot allocate a pty here: %v", err)
+	}
+
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	if err := session.Shell(); err != nil {
+		t.Fatal(err)
+	}
+
+	read := make(chan []byte, 1)
+
+	go func() {
+		out, _ := io.ReadAll(stdout)
+		read <- out
+	}()
+
+	select {
+	case out := <-read:
+		if !bytes.Contains(out, []byte("done")) {
+			t.Fatalf("client saw %q, want it to contain %q", out, "done")
+		}
+		if elapsed := time.Since(start); elapsed >= ptyDrainTimeout {
+			t.Fatalf("session took %s to close, the drain timeout is %s", elapsed, ptyDrainTimeout)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the session never closed")
+	}
+}
+
+func printDone() *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.Command("cmd", "/c", "echo done")
+	}
+
+	return exec.Command("/bin/sh", "-c", "echo done")
 }

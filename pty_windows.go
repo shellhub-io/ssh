@@ -5,6 +5,7 @@ package ssh
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
@@ -17,6 +18,7 @@ import (
 type impl struct {
 	Context
 	*conpty.ConPty
+	output *os.File
 }
 
 func (i *impl) IsZero() bool {
@@ -31,7 +33,7 @@ func (i *impl) Read(p []byte) (n int, err error) {
 	if i.ConPty == nil {
 		return 0, ErrUnsupported
 	}
-	return i.ConPty.Read(p)
+	return i.output.Read(p)
 }
 
 func (i *impl) Write(p []byte) (n int, err error) {
@@ -48,9 +50,13 @@ func (i *impl) Resize(w int, h int) error {
 	return i.ConPty.Resize(w, h)
 }
 
-// closeSlave has nothing to drop: a ConPTY exposes one handle, and the console
-// host owns the end the command writes to.
 func (i *impl) closeSlave() error {
+	if i.ConPty == nil {
+		return nil
+	}
+
+	go func() { _ = i.ConPty.Close() }()
+
 	return nil
 }
 
@@ -58,6 +64,12 @@ func (i *impl) Close() error {
 	if i.ConPty == nil {
 		return nil
 	}
+
+	go func() {
+		_, _ = io.Copy(io.Discard, i.output)
+		_ = i.output.Close()
+	}()
+
 	return i.ConPty.Close()
 }
 
@@ -115,5 +127,23 @@ func newPty(ctx Context, _ string, win Window, _ ssh.TerminalModes) (impl, error
 		return impl{}, err
 	}
 
-	return impl{ctx, c}, nil
+	output, err := duplicateOutput(c)
+	if err != nil {
+		_ = c.Close()
+
+		return impl{}, err
+	}
+
+	return impl{ctx, c, output}, nil
+}
+
+func duplicateOutput(c *conpty.ConPty) (*os.File, error) {
+	self := windows.CurrentProcess()
+
+	var dup windows.Handle
+	if err := windows.DuplicateHandle(self, windows.Handle(c.OutPipeReadFd()), self, &dup, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
+		return nil, fmt.Errorf("failed to duplicate the pseudo console output: %w", err)
+	}
+
+	return os.NewFile(uintptr(dup), "conpty-output"), nil
 }
