@@ -177,9 +177,9 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 				originPort, _ := strconv.Atoi(orignPortStr)
 				payload := gossh.Marshal(&remoteForwardChannelData{
 					DestAddr:   reqPayload.BindAddr,
-					DestPort:   uint32(destPort),
+					DestPort:   uint32(destPort), //nolint:gosec // a port parsed from the listener address fits in 16 bits
 					OriginAddr: originAddr,
-					OriginPort: uint32(originPort),
+					OriginPort: uint32(originPort), //nolint:gosec // a port parsed from the peer address fits in 16 bits
 				})
 				go func() {
 					defer recoverAndLog("panic opening forwarded channel", nil, func() {
@@ -210,7 +210,7 @@ func (h *ForwardedTCPHandler) HandleSSHRequest(ctx Context, srv *Server, req *go
 			delete(h.forwards, addr)
 			h.Unlock()
 		}()
-		return true, gossh.Marshal(&remoteForwardSuccess{uint32(destPort)})
+		return true, gossh.Marshal(&remoteForwardSuccess{uint32(destPort)}) //nolint:gosec // a port parsed from the listener address fits in 16 bits
 
 	case "cancel-tcpip-forward":
 		var reqPayload remoteForwardCancelRequest

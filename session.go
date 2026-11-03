@@ -179,7 +179,7 @@ func (sess *session) Exit(code int) error {
 	}
 	sess.exited = true
 
-	status := struct{ Status uint32 }{uint32(code)}
+	status := struct{ Status uint32 }{uint32(code)} //nolint:gosec // RFC 4254 sends exit-status as a uint32; the handler chooses the code, and a negative one wraps as in C
 	_, err := sess.SendRequest("exit-status", false, gossh.Marshal(&status))
 	if err != nil {
 		return err
