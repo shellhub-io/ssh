@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   lint:
-    uses: charmbracelet/meta/.github/workflows/lint.yml@main
+    uses: charmbracelet/meta/.github/workflows/lint.yml@2031836b979f4138001f6b31cee3fc2cf3dc9c28
     with:
       golangci_path: .golangci.yml
       golangci_version: v2.9

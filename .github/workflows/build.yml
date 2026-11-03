@@ -12,9 +12,7 @@ concurrency:
 
 jobs:
   build:
-    uses: charmbracelet/meta/.github/workflows/build.yml@main
-    secrets:
-      gh_pat: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+    uses: charmbracelet/meta/.github/workflows/build.yml@2031836b979f4138001f6b31cee3fc2cf3dc9c28
 
   codecov:
     runs-on: ubuntu-latest
